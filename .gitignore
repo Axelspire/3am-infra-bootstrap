@@ -1,0 +1,35 @@
+# Local .terraform / .tofu directories
+**/.terraform/*
+**/.tofu/*
+
+# Terraform / OpenTofu state and lock files (state lives in S3 in real use)
+*.tfstate
+*.tfstate.*
+*.tofustate
+*.tofustate.*
+
+# Crash log files
+crash.log
+crash.*.log
+
+# Plan output
+*.tfplan
+*.tfplan.*
+
+# Local CLI configuration
+.terraformrc
+terraform.rc
+
+# Variable override files (may contain secrets)
+*.auto.tfvars
+*.auto.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
