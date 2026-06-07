@@ -22,6 +22,24 @@ variable "axelspire_ci_role_name" {
   default     = "GitHubActions-CustomerDeploy"
 }
 
+variable "axelspire_artifact_kms_key_arn" {
+  description = "ARN (or alias ARN) of the AxelSpire-owned KMS CMK in the CI account that encrypts this customer's Terraform state and Lambda code artifacts. AxelSpire retains administrative control of this key so license expiry can render the customer's state and code unreadable without touching customer-owned resources. The alias form (arn:aws:kms:<region>:<ci_account>:alias/3am-ci/<customer_id>) is accepted and recommended."
+  type        = string
+  validation {
+    condition     = can(regex("^arn:aws[a-zA-Z-]*:kms:[a-z0-9-]+:[0-9]{12}:(key/[a-f0-9-]+|alias/[A-Za-z0-9/_-]+)$", var.axelspire_artifact_kms_key_arn))
+    error_message = "Must be a KMS key or alias ARN (arn:aws:kms:<region>:<account>:key/... or .../alias/...)."
+  }
+}
+
+variable "axelspire_artifact_s3_bucket_arn" {
+  description = "ARN of the AxelSpire CI account S3 bucket that hosts encrypted Lambda code zips for this customer. The ThreeAM-Deployment role is granted cross-account s3:GetObject on this bucket so downstream stacks can fetch and deploy Lambda packages."
+  type        = string
+  validation {
+    condition     = can(regex("^arn:aws[a-zA-Z-]*:s3:::[a-z0-9.-]+$", var.axelspire_artifact_s3_bucket_arn))
+    error_message = "Must be an S3 bucket ARN (arn:aws:s3:::<bucket-name>)."
+  }
+}
+
 variable "external_id_secret_arn" {
   description = "Optional ARN of a customer-managed Secrets Manager secret containing the external ID. The customer rotates this; AxelSpire is given the current value out-of-band. If null, no external ID condition is applied."
   type        = string

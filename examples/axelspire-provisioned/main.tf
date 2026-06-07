@@ -51,6 +51,16 @@ variable "external_id" {
   sensitive   = true
 }
 
+variable "axelspire_artifact_kms_key_arn" {
+  description = "Alias ARN of the AxelSpire-owned CI CMK for this customer (from the customer-onboard PR)."
+  type        = string
+}
+
+variable "axelspire_artifact_s3_bucket_arn" {
+  description = "ARN of the shared AxelSpire CI artifacts S3 bucket."
+  type        = string
+}
+
 # 1. Create the empty AWS account inside AxelSpire's Organization.
 #    OrganizationAccountAccessRole is created automatically by AWS.
 resource "aws_organizations_account" "customer" {
@@ -93,10 +103,12 @@ module "three_am_bootstrap" {
     aws = aws.new_account
   }
 
-  customer_id              = var.customer_id
-  axelspire_ci_account_id  = var.axelspire_ci_account_id
-  external_id_secret_arn   = aws_secretsmanager_secret.external_id.arn
-  customer_admin_role_arns = []
+  customer_id                      = var.customer_id
+  axelspire_ci_account_id          = var.axelspire_ci_account_id
+  external_id_secret_arn           = aws_secretsmanager_secret.external_id.arn
+  customer_admin_role_arns         = []
+  axelspire_artifact_kms_key_arn   = var.axelspire_artifact_kms_key_arn
+  axelspire_artifact_s3_bucket_arn = var.axelspire_artifact_s3_bucket_arn
 
   tags = {
     Environment    = "production"

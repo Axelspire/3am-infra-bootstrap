@@ -49,6 +49,22 @@ resource "aws_ssm_parameter" "deployment_role_arn" {
   tags        = local.common_tags
 }
 
+resource "aws_ssm_parameter" "axelspire_artifact_kms_key_arn" {
+  name        = "/3am/axelspire/artifact-kms-key-arn"
+  description = "ARN (or alias ARN) of the AxelSpire-owned CI CMK used to encrypt this customer's TF state and Lambda artifacts."
+  type        = "String"
+  value       = var.axelspire_artifact_kms_key_arn
+  tags        = local.common_tags
+}
+
+resource "aws_ssm_parameter" "axelspire_artifact_s3_bucket_arn" {
+  name        = "/3am/axelspire/artifact-s3-bucket-arn"
+  description = "ARN of the AxelSpire CI artifacts S3 bucket that downstream stacks fetch Lambda code zips from."
+  type        = "String"
+  value       = var.axelspire_artifact_s3_bucket_arn
+  tags        = local.common_tags
+}
+
 resource "aws_ssm_parameter" "bootstrap_version" {
   name        = "/3am/bootstrap/version"
   description = "Version of the bootstrap module that was last applied."

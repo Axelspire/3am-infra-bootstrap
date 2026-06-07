@@ -43,6 +43,17 @@ variable "customer_admin_role_arns" {
   type = list(string)
 }
 
+# Supplied by AxelSpire after the customer-onboard PR is merged and
+# platform-deploy provisions the per-customer CI CMK + shared artifacts
+# bucket. The alias form is recommended for the KMS ARN.
+variable "axelspire_artifact_kms_key_arn" {
+  type = string
+}
+
+variable "axelspire_artifact_s3_bucket_arn" {
+  type = string
+}
+
 # Customer-controlled secret holding the external ID. Rotated by the
 # customer; AxelSpire is given the current value out-of-band. Pre-create
 # this secret manually or via a separate module so its lifecycle is
@@ -54,10 +65,12 @@ data "aws_secretsmanager_secret" "external_id" {
 module "three_am_bootstrap" {
   source = "../../deploy"
 
-  customer_id              = var.customer_id
-  axelspire_ci_account_id  = var.axelspire_ci_account_id
-  customer_admin_role_arns = var.customer_admin_role_arns
-  external_id_secret_arn   = data.aws_secretsmanager_secret.external_id.arn
+  customer_id                      = var.customer_id
+  axelspire_ci_account_id          = var.axelspire_ci_account_id
+  customer_admin_role_arns         = var.customer_admin_role_arns
+  external_id_secret_arn           = data.aws_secretsmanager_secret.external_id.arn
+  axelspire_artifact_kms_key_arn   = var.axelspire_artifact_kms_key_arn
+  axelspire_artifact_s3_bucket_arn = var.axelspire_artifact_s3_bucket_arn
 
   tags = {
     Environment = "production"

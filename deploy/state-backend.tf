@@ -7,6 +7,14 @@
 # apply. Once they exist, the AxelSpire CI Terragrunt configuration in
 # 3am-deployments uses them as the remote state for every 3AM stack
 # (onboarding, infra, core, ocsp, datasink).
+#
+# Encryption: SSE-KMS uses the AxelSpire-owned CI CMK
+# (var.axelspire_artifact_kms_key_arn) rather than the customer-owned
+# CMK created in kms.tf. This makes state and lock entries unreadable
+# whenever AxelSpire disables the CI CMK at license end, which is the
+# kill-switch the platform relies on. Customer-owned data in downstream
+# stacks (audit logs, SSM SecureStrings, application data) continues to
+# use the customer CMK and is unaffected by the kill switch.
 
 resource "aws_s3_bucket" "state" {
   bucket = "3am-state-${local.account_id}-${local.region}"
@@ -40,7 +48,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm     = "aws:kms"
-      kms_master_key_id = aws_kms_key.three_am.arn
+      kms_master_key_id = var.axelspire_artifact_kms_key_arn
     }
     bucket_key_enabled = true
   }
@@ -126,7 +134,7 @@ resource "aws_dynamodb_table" "state_lock" {
 
   server_side_encryption {
     enabled     = true
-    kms_key_arn = aws_kms_key.three_am.arn
+    kms_key_arn = var.axelspire_artifact_kms_key_arn
   }
 
   point_in_time_recovery {

@@ -2,26 +2,593 @@
 
 A single, versioned [OpenTofu](https://opentofu.org) module that creates the
 **trust anchor** between a customer's AWS account and AxelSpire's deployment
-pipeline. It is applied exactly once per customer account, before any other
-3AM stack can run.
+pipeline. Applied exactly once per customer account, before any other 3AM
+stack can run.
 
-It produces five things, all owned entirely by the customer's account:
+- [What you do (checklist)](#what-you-do-checklist)
+- [Prerequisites](#prerequisites)
+- [Path A — OpenTofu (recommended)](#path-a--opentofu-recommended)
+- [Path B — AWS CLI v2 (no OpenTofu)](#path-b--aws-cli-v2-no-opentofu)
+- [Hand-off to AxelSpire](#hand-off-to-axelspire)
+- [Verify the apply](#verify-the-apply)
+- [Reference](#reference) — who runs it, what it creates, security model, inputs/outputs
 
-- A customer-managed KMS key (CMK) with alias `alias/3am-customer-cmk`.
-- A cross-account IAM role `ThreeAM-Deployment` that AxelSpire's CI assumes
-  to deploy and operate the 3AM product. It carries no long-lived credentials
-  and can be revoked unilaterally by the customer at any time.
-- An S3 bucket (`3am-state-<account>-<region>`) and DynamoDB table
-  (`3am-state-lock`) used as the Terraform state backend for every later
-  3AM stack.
-- `/3am/*` SSM parameters that downstream stacks read to discover the above.
+---
 
-This module is intentionally minimal and reviewable. A security reviewer
-should be able to read this README, [`docs/REVIEWING.md`](docs/REVIEWING.md),
-[`deploy/iam.tf`](deploy/iam.tf) and [`deploy/kms.tf`](deploy/kms.tf) in
-about 30 minutes and produce an informed approval decision.
+## What you do (checklist)
 
-## Who runs it
+Pick **one** path (A or B). Both produce the same resources in the same
+customer account.
+
+- [ ] **Step 0.** Gather inputs (account ID, region, AxelSpire CI account ID,
+      customer admin role ARNs, **plus the AxelSpire-supplied hand-off
+      bundle** — `axelspire_artifact_kms_key_arn` and
+      `axelspire_artifact_s3_bucket_arn`, produced by AxelSpire's
+      `customer-onboard` workflow once the onboarding PR is merged).
+- [ ] **Step 1.** Create the external-ID secret in Secrets Manager.
+- [ ] **Step 2.** Run **Path A** (OpenTofu) **or** **Path B** (AWS CLI v2).
+- [ ] **Step 3.** Capture the hand-off bundle and share it with AxelSpire
+      over the agreed secure channel.
+- [ ] **Step 4.** Run the verification commands.
+
+---
+
+## Prerequisites
+
+1. An AWS account in the customer's AWS Organization, dedicated to 3AM.
+2. Admin credentials for that account (e.g. an SSO role with
+   `AdministratorAccess`). The AxelSpire CI role is **not** sufficient — this
+   module must run before that role exists.
+3. The AxelSpire CI account ID (fixed: `033113129683`).
+4. One or more customer admin role ARNs that will hold key-management rights
+   on the CMK (e.g. `PlatformAdmin`, `BreakGlass`).
+5. **The AxelSpire-supplied hand-off bundle** for this customer:
+   - `axelspire_artifact_kms_key_arn` — alias ARN of the AxelSpire-owned CI
+     CMK that will encrypt the Terraform state and Lambda code zips for
+     this customer. Form:
+     `arn:aws:kms:<ci-region>:<ci-account>:alias/3am-ci/<customer-id>`.
+   - `axelspire_artifact_s3_bucket_arn` — ARN of the shared CI artifacts
+     S3 bucket. Form: `arn:aws:s3:::3am-ci-artifacts-<ci-account>-<ci-region>`.
+   These appear in the body of the AxelSpire `customer-onboard` PR and
+   become resolvable in AWS the moment that PR is merged.
+6. For Path A: OpenTofu `>= 1.6` (Terraform `>= 1.5` also works), AWS
+   provider `~> 5.60`.
+7. For Path B: AWS CLI v2, `jq`, `openssl`.
+
+### Step 0 — set inputs
+
+```sh
+export AWS_PROFILE=customer-admin
+export AWS_REGION=eu-west-1
+
+export CUSTOMER_ID=acme-corp
+export AXELSPIRE_CI_ACCOUNT_ID=033113129683
+export AXELSPIRE_CI_ROLE_NAME=GitHubActions-CustomerDeploy
+export CUSTOMER_ADMIN_ROLE_ARNS='["arn:aws:iam::123456789012:role/PlatformAdmin","arn:aws:iam::123456789012:role/BreakGlass"]'
+
+# Hand-off bundle from AxelSpire (see the merged customer-onboard PR body).
+export AXELSPIRE_ARTIFACT_KMS_KEY_ARN="arn:aws:kms:eu-west-1:${AXELSPIRE_CI_ACCOUNT_ID}:alias/3am-ci/${CUSTOMER_ID}"
+export AXELSPIRE_ARTIFACT_S3_BUCKET_ARN="arn:aws:s3:::3am-ci-artifacts-${AXELSPIRE_CI_ACCOUNT_ID}-eu-west-1"
+
+export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+export PARTITION=aws
+```
+
+### Step 1 — create the external-ID secret
+
+The customer owns and rotates this secret. AxelSpire gets the current value
+out-of-band; it is **not** in any Terraform output.
+
+```sh
+aws secretsmanager create-secret \
+  --name /3am/license/external-id \
+  --secret-string "$(openssl rand -hex 32)"
+
+export EXTERNAL_ID_SECRET_ARN=$(aws secretsmanager describe-secret \
+  --secret-id /3am/license/external-id --query ARN --output text)
+```
+
+---
+
+## Path A — OpenTofu (recommended)
+
+Runs the module in [`deploy/`](deploy/). See
+[`examples/customer-applied/`](examples/customer-applied/) for the full
+wrapping example, and [`examples/axelspire-provisioned/`](examples/axelspire-provisioned/)
+for the managed-onboarding variant (AxelSpire creates the account first,
+then transfers it to the customer's Organization).
+
+### A.1 — write `acme.tfvars`
+
+```hcl
+customer_id                      = "acme-corp"
+region                           = "eu-west-1"
+axelspire_ci_account_id          = "033113129683"
+customer_admin_role_arns         = [
+  "arn:aws:iam::123456789012:role/PlatformAdmin",
+  "arn:aws:iam::123456789012:role/BreakGlass",
+]
+axelspire_artifact_kms_key_arn   = "arn:aws:kms:eu-west-1:033113129683:alias/3am-ci/acme-corp"
+axelspire_artifact_s3_bucket_arn = "arn:aws:s3:::3am-ci-artifacts-033113129683-eu-west-1"
+```
+
+### A.2 — apply
+
+```sh
+cd examples/customer-applied
+tofu init
+tofu apply -var-file=acme.tfvars
+```
+
+### A.3 — capture the hand-off bundle
+
+```sh
+tofu output -json handoff_values > handoff.json
+```
+
+Go to [Hand-off to AxelSpire](#hand-off-to-axelspire).
+
+---
+
+## Path B — AWS CLI v2 (no OpenTofu)
+
+This path reproduces the OpenTofu module step-by-step using `aws` CLI v2.
+The resulting resources are identical to Path A — same names, same policies,
+same tags — so a subsequent `tofu import` is possible if the customer later
+adopts OpenTofu.
+
+> Run the steps in order. Each step is idempotent within itself but assumes
+> the previous step has succeeded. Re-running a step that already created
+> its resource will fail with `EntityAlreadyExists` / `BucketAlreadyOwnedByYou`
+> — that is expected and safe; skip to the next step.
+
+### B.1 — common tags
+
+```sh
+export COMMON_TAGS_JSON=$(jq -cn \
+  --arg customer "$CUSTOMER_ID" \
+  '[
+    {Key:"Service",          Value:"3am"},
+    {Key:"CustomerId",       Value:$customer},
+    {Key:"ManagedBy",        Value:"3am-infra-bootstrap"},
+    {Key:"BootstrapVersion", Value:"0.1.0"}
+  ]')
+```
+
+### B.2 — create the deployment IAM role (trust policy only)
+
+The KMS key policy will reference this role's ARN, so the role must exist
+first. Permissions are attached in step B.5 after the KMS key and state
+backend exist.
+
+```sh
+cat > /tmp/trust-policy.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Sid": "AllowAxelspireCIAssumeRole",
+    "Effect": "Allow",
+    "Principal": {
+      "AWS": "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_ROLE_NAME}"
+    },
+    "Action": ["sts:AssumeRole", "sts:TagSession"],
+    "Condition": {
+      "StringLike": {
+        "sts:RoleSessionName": ["3am-*", "tg-*"]
+      },
+      "StringEquals": {
+        "sts:ExternalId":                    "$(aws secretsmanager get-secret-value --secret-id "$EXTERNAL_ID_SECRET_ARN" --query SecretString --output text)",
+        "aws:RequestTag/LicenseValid":       "true"
+      }
+    }
+  }]
+}
+EOF
+
+aws iam create-role \
+  --role-name ThreeAM-Deployment \
+  --description "Cross-account role assumed by AxelSpire CI to deploy 3AM resources for ${CUSTOMER_ID}." \
+  --max-session-duration 3600 \
+  --assume-role-policy-document file:///tmp/trust-policy.json \
+  --tags "$(echo "$COMMON_TAGS_JSON" | jq -c '.')"
+
+export DEPLOYMENT_ROLE_ARN=$(aws iam get-role \
+  --role-name ThreeAM-Deployment --query Role.Arn --output text)
+```
+
+> If the customer's policy does **not** require the `LicenseValid` session
+> tag, remove the `aws:RequestTag/LicenseValid` line from the Condition
+> block. Likewise, omit the `sts:ExternalId` line if no external ID is in
+> use. This mirrors the `require_license_session_tag` and
+> `external_id_secret_arn` variables in `deploy/variables.tf`.
+
+### B.3 — create the customer-managed CMK and alias
+
+```sh
+ADMINS_JSON=$(echo "$CUSTOMER_ADMIN_ROLE_ARNS" | jq -c '.')
+
+cat > /tmp/kms-policy.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EnableIAMUserPermissions",
+      "Effect": "Allow",
+      "Principal": {"AWS": "arn:${PARTITION}:iam::${ACCOUNT_ID}:root"},
+      "Action": "kms:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowCustomerAdminsKeyManagement",
+      "Effect": "Allow",
+      "Principal": {"AWS": ${ADMINS_JSON}},
+      "Action": [
+        "kms:Create*","kms:Describe*","kms:Enable*","kms:List*","kms:Put*",
+        "kms:Update*","kms:Revoke*","kms:Disable*","kms:Get*","kms:Delete*",
+        "kms:TagResource","kms:UntagResource",
+        "kms:ScheduleKeyDeletion","kms:CancelKeyDeletion"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowAxelspireDeploymentRoleDataPlane",
+      "Effect": "Allow",
+      "Principal": {"AWS": "${DEPLOYMENT_ROLE_ARN}"},
+      "Action": [
+        "kms:Encrypt","kms:Decrypt","kms:ReEncryptFrom","kms:ReEncryptTo",
+        "kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext",
+        "kms:DescribeKey"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowLambdaServiceUseInThisAccount",
+      "Effect": "Allow",
+      "Principal": {"Service": "lambda.amazonaws.com"},
+      "Action": [
+        "kms:Encrypt","kms:Decrypt","kms:ReEncryptFrom","kms:ReEncryptTo",
+        "kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext",
+        "kms:DescribeKey","kms:CreateGrant"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService":     "lambda.${AWS_REGION}.amazonaws.com",
+          "kms:CallerAccount":  "${ACCOUNT_ID}"
+        }
+      }
+    }
+  ]
+}
+EOF
+
+export KMS_KEY_ID=$(aws kms create-key \
+  --description "3AM customer-managed CMK for ${CUSTOMER_ID}" \
+  --policy file:///tmp/kms-policy.json \
+  --tags "$(echo "$COMMON_TAGS_JSON" | jq -c '[.[] | {TagKey:.Key, TagValue:.Value}]')" \
+  --query KeyMetadata.KeyId --output text)
+
+aws kms enable-key-rotation --key-id "$KMS_KEY_ID"
+
+aws kms create-alias \
+  --alias-name alias/3am-customer-cmk \
+  --target-key-id "$KMS_KEY_ID"
+
+export KMS_KEY_ARN=$(aws kms describe-key --key-id "$KMS_KEY_ID" \
+  --query KeyMetadata.Arn --output text)
+```
+
+### B.4 — create the state backend (S3 + DynamoDB)
+
+```sh
+export STATE_BUCKET="3am-state-${ACCOUNT_ID}-${AWS_REGION}"
+
+# Bucket (the LocationConstraint flag is required for every region except us-east-1).
+if [ "$AWS_REGION" = "us-east-1" ]; then
+  aws s3api create-bucket --bucket "$STATE_BUCKET"
+else
+  aws s3api create-bucket --bucket "$STATE_BUCKET" \
+    --create-bucket-configuration LocationConstraint="$AWS_REGION"
+fi
+
+aws s3api put-bucket-tagging --bucket "$STATE_BUCKET" \
+  --tagging "TagSet=$(echo "$COMMON_TAGS_JSON" | jq -c '.')"
+
+aws s3api put-bucket-ownership-controls --bucket "$STATE_BUCKET" \
+  --ownership-controls 'Rules=[{ObjectOwnership=BucketOwnerEnforced}]'
+
+aws s3api put-public-access-block --bucket "$STATE_BUCKET" \
+  --public-access-block-configuration \
+    BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+aws s3api put-bucket-versioning --bucket "$STATE_BUCKET" \
+  --versioning-configuration Status=Enabled
+
+aws s3api put-bucket-encryption --bucket "$STATE_BUCKET" \
+  --server-side-encryption-configuration "$(jq -cn --arg arn "$AXELSPIRE_ARTIFACT_KMS_KEY_ARN" '{
+    Rules:[{
+      ApplyServerSideEncryptionByDefault:{SSEAlgorithm:"aws:kms",KMSMasterKeyID:$arn},
+      BucketKeyEnabled:true
+    }]
+  }')"
+
+aws s3api put-bucket-lifecycle-configuration --bucket "$STATE_BUCKET" \
+  --lifecycle-configuration '{
+    "Rules":[{
+      "ID":"transition-noncurrent-to-glacier","Status":"Enabled","Filter":{},
+      "NoncurrentVersionTransitions":[{"NoncurrentDays":90,"StorageClass":"GLACIER"}],
+      "NoncurrentVersionExpiration":{"NoncurrentDays":365}
+    }]
+  }'
+
+aws s3api put-bucket-policy --bucket "$STATE_BUCKET" --policy "$(jq -cn \
+  --arg arn "arn:${PARTITION}:s3:::${STATE_BUCKET}" '{
+    Version:"2012-10-17",
+    Statement:[{
+      Sid:"DenyInsecureTransport", Effect:"Deny", Principal:"*", Action:"s3:*",
+      Resource:[$arn, ($arn+"/*")],
+      Condition:{Bool:{"aws:SecureTransport":"false"}}
+    }]
+  }')"
+
+# DynamoDB lock table.
+aws dynamodb create-table \
+  --table-name 3am-state-lock \
+  --billing-mode PAY_PER_REQUEST \
+  --attribute-definitions AttributeName=LockID,AttributeType=S \
+  --key-schema           AttributeName=LockID,KeyType=HASH \
+  --sse-specification    "Enabled=true,SSEType=KMS,KMSMasterKeyId=${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" \
+  --tags "$(echo "$COMMON_TAGS_JSON" | jq -c '.')"
+
+aws dynamodb wait table-exists --table-name 3am-state-lock
+
+aws dynamodb update-continuous-backups \
+  --table-name 3am-state-lock \
+  --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true
+
+export STATE_LOCK_TABLE_ARN=$(aws dynamodb describe-table \
+  --table-name 3am-state-lock --query Table.TableArn --output text)
+export STATE_BUCKET_ARN="arn:${PARTITION}:s3:::${STATE_BUCKET}"
+```
+
+### B.5 — attach the three inline permission policies
+
+These mirror, statement-for-statement, [`deploy/iam.tf`](deploy/iam.tf),
+[`deploy/iam-permissions-ec2.tf`](deploy/iam-permissions-ec2.tf), and
+[`deploy/iam-permissions-extra.tf`](deploy/iam-permissions-extra.tf).
+
+```sh
+# ---- ThreeAM-Deployment-Permissions (trust-anchor resources) ----
+cat > /tmp/perms.json <<EOF
+{
+  "Version":"2012-10-17",
+  "Statement":[
+    {
+      "Sid":"LambdaOn3amFunctions","Effect":"Allow","Action":"lambda:*",
+      "Resource":"arn:${PARTITION}:lambda:*:${ACCOUNT_ID}:function:3am-*"
+    },
+    {
+      "Sid":"KmsDataPlaneOnCustomerCmk","Effect":"Allow",
+      "Action":["kms:Encrypt","kms:Decrypt","kms:ReEncryptFrom","kms:ReEncryptTo",
+                "kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext","kms:DescribeKey"],
+      "Resource":"${KMS_KEY_ARN}"
+    },
+    {
+      "Sid":"KmsDataPlaneOnAxelspireArtifactCmk","Effect":"Allow",
+      "Action":["kms:Encrypt","kms:Decrypt","kms:ReEncryptFrom","kms:ReEncryptTo",
+                "kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext","kms:DescribeKey"],
+      "Resource":"${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"
+    },
+    {
+      "Sid":"S3OnStateBucket","Effect":"Allow",
+      "Action":["s3:GetObject","s3:GetObjectVersion","s3:PutObject","s3:DeleteObject",
+                "s3:ListBucket","s3:ListBucketVersions","s3:GetBucketVersioning",
+                "s3:GetEncryptionConfiguration","s3:GetBucketLocation"],
+      "Resource":["${STATE_BUCKET_ARN}","${STATE_BUCKET_ARN}/*"]
+    },
+    {
+      "Sid":"S3ReadOnAxelspireArtifactBucket","Effect":"Allow",
+      "Action":["s3:GetObject","s3:GetObjectVersion","s3:ListBucket","s3:GetBucketLocation"],
+      "Resource":["${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}","${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}/*"]
+    },
+    {
+      "Sid":"DynamoDBOnStateLockTable","Effect":"Allow",
+      "Action":["dynamodb:GetItem","dynamodb:PutItem","dynamodb:DeleteItem","dynamodb:DescribeTable"],
+      "Resource":"${STATE_LOCK_TABLE_ARN}"
+    }
+  ]
+}
+EOF
+aws iam put-role-policy --role-name ThreeAM-Deployment \
+  --policy-name ThreeAM-Deployment-Permissions \
+  --policy-document file:///tmp/perms.json
+
+# ---- ThreeAM-Deployment-Permissions-Ec2 ----
+cat > /tmp/perms-ec2.json <<EOF
+{
+  "Version":"2012-10-17",
+  "Statement":[
+    {
+      "Sid":"Ec2VpcRead","Effect":"Allow",
+      "Action":["ec2:DescribeVpcs","ec2:DescribeSubnets","ec2:DescribeRouteTables",
+                "ec2:DescribeNetworkInterfaces","ec2:DescribeSecurityGroups",
+                "ec2:DescribeAvailabilityZones","ec2:DescribeRegions","ec2:DescribeAccountAttributes"],
+      "Resource":"*"
+    },
+    {
+      "Sid":"Ec2SecurityGroupWriteOnTagged","Effect":"Allow",
+      "Action":["ec2:AuthorizeSecurityGroupIngress","ec2:AuthorizeSecurityGroupEgress",
+                "ec2:RevokeSecurityGroupIngress","ec2:RevokeSecurityGroupEgress",
+                "ec2:CreateTags","ec2:DeleteTags"],
+      "Resource":"arn:${PARTITION}:ec2:*:${ACCOUNT_ID}:security-group/*",
+      "Condition":{"StringEquals":{"aws:ResourceTag/Service":"3am"}}
+    },
+    {
+      "Sid":"Ec2SecurityGroupCreate","Effect":"Allow",
+      "Action":"ec2:CreateSecurityGroup","Resource":"*",
+      "Condition":{"StringEquals":{"aws:RequestTag/Service":"3am"}}
+    }
+  ]
+}
+EOF
+aws iam put-role-policy --role-name ThreeAM-Deployment \
+  --policy-name ThreeAM-Deployment-Permissions-Ec2 \
+  --policy-document file:///tmp/perms-ec2.json
+
+# ---- ThreeAM-Deployment-Permissions-Extra (SSM / Logs / APIGW / R53 / ACM) ----
+cat > /tmp/perms-extra.json <<EOF
+{
+  "Version":"2012-10-17",
+  "Statement":[
+    {
+      "Sid":"SsmReadOn3amParameters","Effect":"Allow",
+      "Action":["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","ssm:DescribeParameters"],
+      "Resource":"arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am/*"
+    },
+    {
+      "Sid":"SsmWriteOn3amParameters","Effect":"Allow",
+      "Action":["ssm:PutParameter","ssm:DeleteParameter","ssm:DeleteParameters",
+                "ssm:AddTagsToResource","ssm:RemoveTagsFromResource","ssm:LabelParameterVersion"],
+      "Resource":"arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am/*"
+    },
+    {
+      "Sid":"LogsOn3amGroups","Effect":"Allow",
+      "Action":["logs:CreateLogGroup","logs:CreateLogStream","logs:DeleteLogGroup",
+                "logs:DescribeLogGroups","logs:DescribeLogStreams","logs:PutLogEvents",
+                "logs:PutRetentionPolicy","logs:TagResource","logs:UntagResource","logs:AssociateKmsKey"],
+      "Resource":[
+        "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/3am-*",
+        "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/3am-*:*",
+        "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/3am/*",
+        "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/3am/*:*"
+      ]
+    },
+    {
+      "Sid":"ApiGatewayOnTaggedResources","Effect":"Allow",
+      "Action":["apigateway:GET","apigateway:POST","apigateway:PUT","apigateway:PATCH",
+                "apigateway:DELETE","apigateway:TagResource","apigateway:UntagResource"],
+      "Resource":"arn:${PARTITION}:apigateway:*::/*",
+      "Condition":{"StringEquals":{"aws:ResourceTag/Service":"3am"}}
+    },
+    {
+      "Sid":"Route53Read","Effect":"Allow",
+      "Action":["route53:ListHostedZones","route53:GetHostedZone",
+                "route53:ListResourceRecordSets","route53:GetChange"],
+      "Resource":"*"
+    },
+    {
+      "Sid":"Route53WriteOnTaggedZones","Effect":"Allow",
+      "Action":["route53:ChangeResourceRecordSets","route53:ChangeTagsForResource"],
+      "Resource":"arn:${PARTITION}:route53:::hostedzone/*",
+      "Condition":{"StringEquals":{"aws:ResourceTag/3am-managed":"true"}}
+    },
+    {
+      "Sid":"AcmOnTaggedCertificates","Effect":"Allow",
+      "Action":["acm:DescribeCertificate","acm:GetCertificate","acm:ListTagsForCertificate",
+                "acm:DeleteCertificate","acm:AddTagsToCertificate","acm:RemoveTagsFromCertificate"],
+      "Resource":"*",
+      "Condition":{"StringEquals":{"aws:ResourceTag/Service":"3am"}}
+    },
+    {
+      "Sid":"AcmListAndRequest","Effect":"Allow",
+      "Action":["acm:ListCertificates","acm:RequestCertificate"],
+      "Resource":"*"
+    }
+  ]
+}
+EOF
+aws iam put-role-policy --role-name ThreeAM-Deployment \
+  --policy-name ThreeAM-Deployment-Permissions-Extra \
+  --policy-document file:///tmp/perms-extra.json
+```
+
+### B.6 — publish `/3am/*` SSM parameters
+
+```sh
+TAGS_SSM=$(echo "$COMMON_TAGS_JSON" | jq -c '.')
+
+put_param () {  # name, value, type
+  aws ssm put-parameter --name "$1" --value "$2" --type "$3" --overwrite \
+    >/dev/null
+  aws ssm add-tags-to-resource --resource-type Parameter \
+    --resource-id "$1" --tags "$TAGS_SSM" >/dev/null
+}
+
+put_param /3am/kms/customer-cmk-arn               "$KMS_KEY_ARN"                       String
+put_param /3am/kms/customer-cmk-id                "$KMS_KEY_ID"                        String
+put_param /3am/state/bucket-name                  "$STATE_BUCKET"                      String
+put_param /3am/state/lock-table-name              "3am-state-lock"                     String
+put_param /3am/iam/deployment-role-arn            "$DEPLOYMENT_ROLE_ARN"               String
+put_param /3am/axelspire/artifact-kms-key-arn     "$AXELSPIRE_ARTIFACT_KMS_KEY_ARN"    String
+put_param /3am/axelspire/artifact-s3-bucket-arn   "$AXELSPIRE_ARTIFACT_S3_BUCKET_ARN"  String
+put_param /3am/bootstrap/version                  "0.1.0"                              String
+put_param /3am/bootstrap/applied-at               "$(date -u +%Y-%m-%dT%H:%M:%SZ)"     String
+```
+
+### B.7 — build the hand-off bundle
+
+```sh
+jq -n \
+  --arg customer_id        "$CUSTOMER_ID" \
+  --arg region             "$AWS_REGION" \
+  --arg account_id         "$ACCOUNT_ID" \
+  --arg role_arn           "$DEPLOYMENT_ROLE_ARN" \
+  --arg cmk_arn            "$KMS_KEY_ARN" \
+  --arg state_bucket       "$STATE_BUCKET" \
+  --arg state_lock_table   "3am-state-lock" \
+  --arg artifact_kms       "$AXELSPIRE_ARTIFACT_KMS_KEY_ARN" \
+  --arg artifact_bucket    "$AXELSPIRE_ARTIFACT_S3_BUCKET_ARN" \
+  '{
+    customer_id:                       $customer_id,
+    region:                            $region,
+    account_id:                        $account_id,
+    deployment_role_arn:               $role_arn,
+    customer_kms_key_arn:              $cmk_arn,
+    state_bucket_name:                 $state_bucket,
+    state_lock_table_name:             $state_lock_table,
+    axelspire_artifact_kms_key_arn:    $artifact_kms,
+    axelspire_artifact_s3_bucket_arn:  $artifact_bucket,
+    bootstrap_version:                 "0.1.0"
+  }' > handoff.json
+```
+
+---
+
+## Hand-off to AxelSpire
+
+Share `handoff.json` and the external-ID value with AxelSpire over the
+agreed secure channel. The external ID is **not** in `handoff.json` —
+fetch it separately:
+
+```sh
+aws secretsmanager get-secret-value \
+  --secret-id /3am/license/external-id \
+  --query SecretString --output text
+```
+
+See [`docs/REVIEWING.md`](docs/REVIEWING.md) § "Hand-off" for the channel
+specifics.
+
+---
+
+## Verify the apply
+
+```sh
+aws iam get-role --role-name ThreeAM-Deployment --query Role.Arn
+aws kms describe-key --key-id alias/3am-customer-cmk --query KeyMetadata.Arn
+aws s3api head-bucket --bucket "3am-state-${ACCOUNT_ID}-${AWS_REGION}"
+aws dynamodb describe-table --table-name 3am-state-lock --query Table.TableStatus
+aws ssm get-parameters-by-path --path /3am --recursive --query 'Parameters[].Name'
+```
+
+All five commands should succeed and the SSM list should contain at least
+nine `/3am/...` entries (including the two `/3am/axelspire/*` paths).
+
+---
+
+## Reference
+
+### Who runs it
 
 Two patterns are supported. Both result in the same end state — the
 customer owns every resource and can revoke AxelSpire's access without
@@ -36,18 +603,20 @@ In both patterns the apply runs **inside the target customer account**. The
 AxelSpire CI account is a `Principal` in the role's trust policy, not a
 runner of this module.
 
-## What it creates
+### What it creates
 
 | Resource | Name | Owned by | Purpose |
 |---|---|---|---|
-| KMS key | `alias/3am-customer-cmk` | Customer | Encryption-at-rest for every downstream 3AM resource. |
+| KMS key | `alias/3am-customer-cmk` | Customer | Encryption-at-rest for customer-owned downstream 3AM resources (audit bucket, SSM SecureStrings, application data). |
 | IAM role | `ThreeAM-Deployment` | Customer | Cross-account assume target for AxelSpire CI. No `iam:*`, no `organizations:*`, no broad `s3:*` or `ec2:*`. |
 | IAM role policies | `ThreeAM-Deployment-Permissions{,-Ec2,-Extra}` | Customer | Narrow allow-list scoped by ARN prefix `3am-*` and resource tag `Service=3am`. |
-| S3 bucket | `3am-state-<account>-<region>` | Customer | Terraform state for every 3AM stack. Versioned, KMS-encrypted, TLS-only. |
-| DynamoDB table | `3am-state-lock` | Customer | Terraform state locking. PITR enabled, KMS-encrypted. |
-| SSM parameters | `/3am/{kms,state,iam,bootstrap,license}/...` | Customer | Runtime discovery of the above by downstream stacks. |
+| S3 bucket | `3am-state-<account>-<region>` | Customer | Terraform state for every 3AM stack. Versioned, TLS-only, **SSE-KMS using the AxelSpire CI CMK** (kill-switch). |
+| DynamoDB table | `3am-state-lock` | Customer | Terraform state locking. PITR enabled, **SSE-KMS using the AxelSpire CI CMK** (kill-switch). |
+| SSM parameters | `/3am/{kms,state,iam,bootstrap,axelspire}/...` | Customer | Runtime discovery of the above by downstream stacks. |
+| _(reference only)_ KMS key | `alias/3am-ci/<customer-id>` | **AxelSpire CI** | Encrypts customer state + Lambda artifacts. Disabled by AxelSpire at license end to render state and code unreadable without touching customer-owned resources. |
+| _(reference only)_ S3 bucket | `3am-ci-artifacts-<ci-account>-<region>` | **AxelSpire CI** | Shared (per-region) bucket holding encrypted Lambda code zips for all enrolled customers. |
 
-## How it fits the wider 3AM platform
+### How it fits the wider 3AM platform
 
 ```
 Phase 0  3am-infra-bootstrap          <- this module
@@ -64,44 +633,7 @@ Phase 2  3am-infra, 3am-core, 3am-ocsp, 3am-datasink
 See [`3AM_PROJECTS_OVERVIEW.md`](../3AM_PROJECTS_OVERVIEW.md) for the full
 dependency map.
 
-## Usage
-
-### Pattern 1: customer-applied (default)
-
-```hcl
-module "axelspire_3am_bootstrap" {
-  source = "github.com/Axelspire/3am-infra-bootstrap//deploy?ref=v0.1.0"
-
-  customer_id              = "acme-corp"
-  axelspire_ci_account_id  = "111122223333"
-
-  customer_admin_role_arns = [
-    "arn:aws:iam::123456789012:role/PlatformAdmin",
-    "arn:aws:iam::123456789012:role/BreakGlass",
-  ]
-
-  external_id_secret_arn = aws_secretsmanager_secret.axelspire_external_id.arn
-}
-```
-
-After applying, share the outputs of `module.axelspire_3am_bootstrap.handoff_values`
-with AxelSpire via secure channel (see [`docs/REVIEWING.md`](docs/REVIEWING.md)
-§ "Hand-off").
-
-### Pattern 2: AxelSpire-provisioned (with account creation)
-
-See [`examples/axelspire-provisioned/main.tf`](examples/axelspire-provisioned/main.tf)
-for the full flow: `aws_organizations_account` creates the empty account
-inside AxelSpire's Organization, a provider alias assumes the
-`OrganizationAccountAccessRole` AWS injects into every new account, and the
-bootstrap module is applied through that alias.
-
-After apply, AxelSpire emits an Organization invitation; the customer's
-Org-management role accepts it; the account moves into the customer's
-Organization. From that point forward the customer can revoke AxelSpire's
-access unilaterally.
-
-## Inputs and outputs
+### Inputs and outputs (Path A)
 
 See [`deploy/variables.tf`](deploy/variables.tf) and
 [`deploy/outputs.tf`](deploy/outputs.tf). The most important ones:
@@ -110,6 +642,8 @@ See [`deploy/variables.tf`](deploy/variables.tf) and
 |---|:---:|---|
 | `customer_id` | ✅ | — |
 | `axelspire_ci_account_id` | ✅ | — |
+| `axelspire_artifact_kms_key_arn` | ✅ | — |
+| `axelspire_artifact_s3_bucket_arn` | ✅ | — |
 | `axelspire_ci_role_name` |  | `GitHubActions-CustomerDeploy` |
 | `external_id_secret_arn` |  | `null` |
 | `customer_admin_role_arns` |  | `[]` |
@@ -120,7 +654,7 @@ See [`deploy/variables.tf`](deploy/variables.tf) and
 `output.handoff_values` is the convenience bundle to share with AxelSpire
 (deployment role ARN, CMK ARN, state bucket, lock table, region).
 
-## Security model
+### Security model
 
 - Every resource is owned by the customer account. Revocation requires no
   AxelSpire involvement: delete the trust statement on `ThreeAM-Deployment`
@@ -136,18 +670,12 @@ See [`deploy/variables.tf`](deploy/variables.tf) and
   (`Encrypt`, `Decrypt`, `GenerateDataKey`, `DescribeKey`). Key management
   (rotate, disable, modify policy) stays with the customer.
 
-For the full walkthrough, see [`docs/REVIEWING.md`](docs/REVIEWING.md).
+A security reviewer should be able to read this README,
+[`docs/REVIEWING.md`](docs/REVIEWING.md), [`deploy/iam.tf`](deploy/iam.tf)
+and [`deploy/kms.tf`](deploy/kms.tf) in about 30 minutes and produce an
+informed approval decision.
 
-## Requirements
-
-- OpenTofu `>= 1.6` (Terraform `>= 1.5` also works).
-- AWS provider `~> 5.60`.
-- Credentials with permission to create KMS, IAM, S3, DynamoDB, and SSM
-  resources in the target account. The customer's `PlatformAdmin` role is
-  sufficient; the AxelSpire CI role is **not** — this module must run
-  before that role exists.
-
-## Versioning
+### Versioning
 
 Semantic versioning. Major bumps for breaking changes to inputs/outputs;
 minor for additive changes; patch for documentation and bug fixes.

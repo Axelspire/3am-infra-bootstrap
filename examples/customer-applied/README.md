@@ -17,7 +17,11 @@ succeeds and the customer has shared the role ARN.
      --name /3am/license/external-id \
      --secret-string "$(openssl rand -hex 32)"
    ```
-4. The AxelSpire CI account ID (provided by AxelSpire, e.g. `111122223333`).
+4. The AxelSpire CI account ID (fixed: `033113129683`).
+5. The AxelSpire-supplied **hand-off bundle** for this customer (alias ARN
+   of the per-customer CI CMK + ARN of the shared CI artifacts bucket).
+   These appear in the body of the merged AxelSpire `customer-onboard`
+   PR.
 
 ## Apply
 
@@ -27,8 +31,10 @@ tofu init
 tofu apply \
   -var customer_id=acme-corp \
   -var region=eu-west-1 \
-  -var axelspire_ci_account_id=111122223333 \
-  -var 'customer_admin_role_arns=["arn:aws:iam::123456789012:role/PlatformAdmin"]'
+  -var axelspire_ci_account_id=033113129683 \
+  -var 'customer_admin_role_arns=["arn:aws:iam::123456789012:role/PlatformAdmin"]' \
+  -var axelspire_artifact_kms_key_arn=arn:aws:kms:eu-west-1:033113129683:alias/3am-ci/acme-corp \
+  -var axelspire_artifact_s3_bucket_arn=arn:aws:s3:::3am-ci-artifacts-033113129683-eu-west-1
 ```
 
 ## Hand-off

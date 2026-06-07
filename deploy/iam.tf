@@ -97,6 +97,25 @@ data "aws_iam_policy_document" "deployment_permissions" {
     resources = [aws_kms_key.three_am.arn]
   }
 
+  # KMS data-plane on the AxelSpire CI CMK. Required so the deployment
+  # role can read/write encrypted state and decrypt Lambda zips fetched
+  # from the CI artifacts bucket. The key policy on the CI side grants
+  # the matching back-half of the trust; both sides must agree.
+  statement {
+    sid    = "KmsDataPlaneOnAxelspireArtifactCmk"
+    effect = "Allow"
+    actions = [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncryptFrom",
+      "kms:ReEncryptTo",
+      "kms:GenerateDataKey",
+      "kms:GenerateDataKeyWithoutPlaintext",
+      "kms:DescribeKey",
+    ]
+    resources = [var.axelspire_artifact_kms_key_arn]
+  }
+
   # S3 on the state bucket only. The audit bucket is created and
   # extended by 3am-customer-onboarding (the layer that runs after this
   # one); its permissions are added there.
@@ -117,6 +136,25 @@ data "aws_iam_policy_document" "deployment_permissions" {
     resources = [
       aws_s3_bucket.state.arn,
       "${aws_s3_bucket.state.arn}/*",
+    ]
+  }
+
+  # Cross-account read on the shared AxelSpire CI artifacts bucket so
+  # downstream stacks can fetch Lambda code zips. The bucket policy in
+  # the CI account scopes this to enrolled customer accounts; here we
+  # mirror it from the role side for least-privilege.
+  statement {
+    sid    = "S3ReadOnAxelspireArtifactBucket"
+    effect = "Allow"
+    actions = [
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "s3:ListBucket",
+      "s3:GetBucketLocation",
+    ]
+    resources = [
+      var.axelspire_artifact_s3_bucket_arn,
+      "${var.axelspire_artifact_s3_bucket_arn}/*",
     ]
   }
 
