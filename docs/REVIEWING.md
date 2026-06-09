@@ -27,6 +27,15 @@ After this module is applied, AxelSpire holds:
   [`iam.tf` → `data.aws_iam_policy_document.deployment_trust`]. The
   external ID is an additional condition the customer controls and can
   rotate at any time [`variables.tf` → `external_id_secret_arn`].
+- **No user in the customer's Identity Center directory.** The
+  `3AM-Platform-Admins` and `3AM-BreakGlass` groups, their members, and
+  the `PlatformAdmin` / `BreakGlass` permission sets created by
+  [`_scripts/customer-org-setup.sh`](../_scripts/customer-org-setup.sh)
+  and
+  [`_scripts/single-account-setup.sh`](../_scripts/single-account-setup.sh)
+  are entirely customer-owned. They grant access only to the customer's
+  own AWS account and are independent of the cross-account
+  `ThreeAM-Deployment` role.
 
 ## 2. Trust policy walkthrough
 

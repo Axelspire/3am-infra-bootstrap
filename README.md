@@ -37,6 +37,16 @@ Both create the same downstream Identity Center surface:
 - `3AM-Platform-Admins` and `3AM-BreakGlass` groups, members, and the
   account assignments that bind them to the workload account.
 
+**All identities created by these scripts are customer-owned.** The
+`--platform-admin-user`, `--breakglass-user`, the `3AM-Platform-Admins`
+and `3AM-BreakGlass` groups, and the `PlatformAdmin` / `BreakGlass`
+permission sets all live in the customer's Identity Center directory
+and grant access only to the customer's own account. AxelSpire never
+appears as a user in the customer's directory; its only foothold is
+the separate `ThreeAM-Deployment` IAM role provisioned later by this
+module — see [Security model](#security-model) and
+[`docs/REVIEWING.md`](docs/REVIEWING.md).
+
 ```sh
 # Multi-account (creates a new child account in a 3AM OU)
 curl -fsSLO https://raw.githubusercontent.com/Axelspire/3am-infra-bootstrap/main/_scripts/customer-org-setup.sh
