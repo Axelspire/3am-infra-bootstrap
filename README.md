@@ -95,6 +95,107 @@ Skip this section if the 3AM account, SCPs and SSO setup already exist —
 the rest of this document assumes that end-state regardless of how it
 was reached.
 
+### Using the outputs
+
+A successful `apply` writes the outputs JSON to CloudShell's persistent
+home so it survives session restarts:
+
+| Script | Outputs file |
+|---|---|
+| `customer-org-setup.sh` | `$HOME/3am-org-setup-outputs.json` |
+| `single-account-setup.sh` | `$HOME/3am-single-account-setup-outputs.json` |
+
+Both files contain the same keys (the multi-account variant adds
+`account_name` and `ou_id`):
+
+```json
+{
+  "customer_name": "Acme Corp",
+  "account_id": "085068687349",
+  "identity_center_instance_arn": "arn:aws:sso:::instance/ssoins-…",
+  "identity_store_id": "d-90661a8c5a",
+  "region_deny_policy_id": "p-0n0msfyr",
+  "root_user_deny_policy_id": "p-sjxlgst5",
+  "platform_admin_permission_set_arn": "arn:aws:sso:::permissionSet/…",
+  "breakglass_permission_set_arn": "arn:aws:sso:::permissionSet/…",
+  "platform_admins_group_id": "64a8f4a8-…",
+  "breakglass_group_id": "d4e89418-…",
+  "platform_admin_role_arn": "arn:aws:iam::085068687349:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_PlatformAdmin_…",
+  "breakglass_role_arn": "arn:aws:iam::085068687349:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_BreakGlass_…",
+  "customer_admin_role_arns": [
+    "arn:aws:iam::085068687349:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_PlatformAdmin_…",
+    "arn:aws:iam::085068687349:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_BreakGlass_…"
+  ]
+}
+```
+
+Re-running `outputs-json` regenerates the file by re-resolving every
+value from AWS by name, so it always reflects the live state and is
+safe to run from a fresh CloudShell session:
+
+```sh
+./customer-org-setup.sh outputs-json > "$HOME/3am-org-setup-outputs.json"
+```
+
+#### Feeding the JSON into `acme.tfvars`
+
+The simplest hand-off to [Step 0](#step-0--set-inputs) is to let `jq`
+write the four account-derived `tfvars` lines for you, then append the
+AxelSpire-supplied hand-off bundle by hand:
+
+```sh
+OUTPUTS=$HOME/3am-org-setup-outputs.json
+CUSTOMER_ID=acme-corp
+REGION=eu-west-1
+AXELSPIRE_CI_ACCOUNT_ID=033113129683
+
+jq -r --arg cid "$CUSTOMER_ID" --arg region "$REGION" \
+      --arg ci  "$AXELSPIRE_CI_ACCOUNT_ID" '
+  "customer_id                      = \"\($cid)\"",
+  "region                           = \"\($region)\"",
+  "axelspire_ci_account_id          = \"\($ci)\"",
+  "customer_admin_role_arns         = " + (.customer_admin_role_arns | tojson)
+' "$OUTPUTS" > acme.tfvars
+
+# Append the hand-off bundle (from the merged AxelSpire customer-onboard PR)
+cat >> acme.tfvars <<EOF
+axelspire_artifact_kms_key_arn   = "arn:aws:kms:${REGION}:${AXELSPIRE_CI_ACCOUNT_ID}:alias/3am-ci/${CUSTOMER_ID}"
+axelspire_artifact_s3_bucket_arn = "arn:aws:s3:::3am-ci-artifacts-${AXELSPIRE_CI_ACCOUNT_ID}-${REGION}"
+EOF
+
+# Optional: normalise list formatting (jq emits arrays on one line)
+tofu fmt acme.tfvars  # or: terraform fmt acme.tfvars
+```
+
+#### Populating the Step 0 environment variables
+
+If you prefer the env-var form of [Step 0](#step-0--set-inputs) over a
+tfvars file (e.g. for Path B / AWS CLI), the same JSON drives both:
+
+```sh
+OUTPUTS=$HOME/3am-org-setup-outputs.json
+
+export ACCOUNT_ID=$(jq -r .account_id "$OUTPUTS")
+export CUSTOMER_ADMIN_ROLE_ARNS=$(jq -c .customer_admin_role_arns "$OUTPUTS")
+```
+
+#### Spot-checks before moving on
+
+```sh
+# Both AWSReservedSSO role ARNs resolved (not pending)?
+jq '.customer_admin_role_arns | length' "$HOME/3am-org-setup-outputs.json"
+# → 2
+
+# Region-deny SCP contents match what you passed in --allowed-regions?
+aws organizations describe-policy \
+  --policy-id "$(jq -r .region_deny_policy_id "$HOME/3am-org-setup-outputs.json")" \
+  --query 'Policy.Content' --output text | python3 -m json.tool | head -20
+```
+
+If `customer_admin_role_arns` has fewer than two entries, the first
+account assignment hasn't finished provisioning yet — wait a minute
+and re-run `outputs-json` to regenerate the file.
+
 ### Troubleshooting
 
 **`IAM Identity Center is not enabled in this region. Enable it in the console (one-time, Org-mgmt account) and re-run.`**
