@@ -102,10 +102,17 @@ To resolve:
 5. Re-run the same script invocation. It is idempotent — any work it
    completed before failing is detected and reused.
 
-> The scripts query Identity Center with
-> `aws sso-admin list-instances` in the caller's current region. If
-> you enabled Identity Center in `eu-west-1` but CloudShell is set to
+> **The "Global" indicator in the AWS console does not apply to
+> CloudShell.** Pages like Organizations, IAM, and the AWS Accounts
+> list show "Global" in the top-right region selector, but CloudShell
+> sessions launched from those pages still run in a specific region
+> (whichever region was last selected, or your default — often
+> `us-east-1`). The scripts query Identity Center with
+> `aws sso-admin list-instances`, which is region-scoped: if you
+> enabled Identity Center in `eu-west-1` but CloudShell is in
 > `us-east-1`, the script will still report it as "not enabled".
+> Check the active region with `aws configure list` or
+> `echo "$AWS_REGION"` before re-running.
 
 ---
 
