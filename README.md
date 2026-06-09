@@ -77,6 +77,36 @@ Skip this section if the 3AM account, SCPs and SSO setup already exist —
 the rest of this document assumes that end-state regardless of how it
 was reached.
 
+### Troubleshooting
+
+**`IAM Identity Center is not enabled in this region. Enable it in the console (one-time, Org-mgmt account) and re-run.`**
+
+AWS Identity Center has no public API for the initial activation; it
+must be enabled once per Organization through the AWS console. Both
+setup scripts surface this as a preflight failure rather than try to
+proceed without it.
+
+To resolve:
+
+1. Sign in to the **Org-management account** (the same account the
+   script is running in) with credentials that have
+   `AdministratorAccess`.
+2. Pick the home region for Identity Center — typically the same
+   region you intend to operate the 3AM workload in (e.g.
+   `eu-west-1`). The home region is **permanent**; choose deliberately.
+3. Console → **IAM Identity Center** → **Enable**. Wait until the
+   landing page shows the instance ARN and identity store ID (usually
+   under a minute).
+4. In CloudShell, switch the region to match: `export AWS_REGION=eu-west-1`
+   (or whatever home region you picked).
+5. Re-run the same script invocation. It is idempotent — any work it
+   completed before failing is detected and reused.
+
+> The scripts query Identity Center with
+> `aws sso-admin list-instances` in the caller's current region. If
+> you enabled Identity Center in `eu-west-1` but CloudShell is set to
+> `us-east-1`, the script will still report it as "not enabled".
+
 ---
 
 ## What you do (checklist)
