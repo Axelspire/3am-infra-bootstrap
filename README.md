@@ -5,6 +5,7 @@ A single, versioned [OpenTofu](https://opentofu.org) module that creates the
 pipeline. Applied exactly once per customer account, before any other 3AM
 stack can run.
 
+- [Org-level prep (optional)](#org-level-prep-optional)
 - [What you do (checklist)](#what-you-do-checklist)
 - [Prerequisites](#prerequisites)
 - [Path A — OpenTofu (recommended)](#path-a--opentofu-recommended)
@@ -12,6 +13,59 @@ stack can run.
 - [Hand-off to AxelSpire](#hand-off-to-axelspire)
 - [Verify the apply](#verify-the-apply)
 - [Reference](#reference) — who runs it, what it creates, security model, inputs/outputs
+
+---
+
+## Org-level prep (optional)
+
+Two helper scripts are available, depending on the account topology you
+want. Both run in AWS CloudShell against the customer's Org-management
+account, both are idempotent (`list → create-if-missing` for every
+resource), both embed their SCP bodies as heredocs (single-file `curl`
+deploy), and both expose the same `apply` / `preflight` / `outputs` /
+`outputs-json` sub-commands.
+
+| Variant | Script | When to use |
+|---|---|---|
+| **Multi-account** | [`_scripts/customer-org-setup.sh`](_scripts/customer-org-setup.sh) | Default. Creates a dedicated 3AM workload AWS account inside a `3AM` OU under the Org root. Attaches SCPs to the OU. Recommended pattern — keeps the 3AM workload separate from the Org-management account. |
+| **Single-account** | [`_scripts/single-account-setup.sh`](_scripts/single-account-setup.sh) | The 3AM workload runs in the same AWS account as the Org root (small customers, POCs, freshly-signed-up AWS account used as-is). Skips account / OU creation; assignments target the current caller account. Attaches SCPs to root (no-op for the management account but inherited by any future child accounts). Opt out with `--skip-scps`. |
+
+Both create the same downstream Identity Center surface:
+
+- `3am-region-deny` and `3am-root-user-deny` SCPs.
+- `PlatformAdmin` (8h) and `BreakGlass` (1h) permission sets.
+- `3AM-Platform-Admins` and `3AM-BreakGlass` groups, members, and the
+  account assignments that bind them to the workload account.
+
+```sh
+# Multi-account (creates a new child account in a 3AM OU)
+curl -fsSLO https://raw.githubusercontent.com/Axelspire/3am-infra-bootstrap/main/_scripts/customer-org-setup.sh
+chmod +x customer-org-setup.sh
+./customer-org-setup.sh apply \
+  --customer-name "Acme Corp" \
+  --account-email aws-3am@acme.example.com \
+  --platform-admin-user alice@acme.example.com \
+  --breakglass-user bob@acme.example.com
+./customer-org-setup.sh outputs-json > org-setup.json
+
+# Single-account (use the current account as the 3AM workload)
+curl -fsSLO https://raw.githubusercontent.com/Axelspire/3am-infra-bootstrap/main/_scripts/single-account-setup.sh
+chmod +x single-account-setup.sh
+./single-account-setup.sh apply \
+  --customer-name "Acme Corp" \
+  --platform-admin-user alice@acme.example.com \
+  --breakglass-user bob@acme.example.com
+./single-account-setup.sh outputs-json > org-setup.json
+```
+
+Logs are written to `$HOME/3am-{org,single-account}-setup-<utc>.log`.
+`outputs-json` re-resolves every value from AWS by name and includes
+`customer_admin_role_arns`, which feeds straight into
+[Step 0](#step-0--set-inputs) below.
+
+Skip this section if the 3AM account, SCPs and SSO setup already exist —
+the rest of this document assumes that end-state regardless of how it
+was reached.
 
 ---
 
@@ -36,12 +90,14 @@ customer account.
 ## Prerequisites
 
 1. An AWS account in the customer's AWS Organization, dedicated to 3AM.
+   See [Org-level prep](#org-level-prep-optional) if it doesn't exist yet.
 2. Admin credentials for that account (e.g. an SSO role with
    `AdministratorAccess`). The AxelSpire CI role is **not** sufficient — this
    module must run before that role exists.
 3. The AxelSpire CI account ID (fixed: `033113129683`).
 4. One or more customer admin role ARNs that will hold key-management rights
-   on the CMK (e.g. `PlatformAdmin`, `BreakGlass`).
+   on the CMK (e.g. `PlatformAdmin`, `BreakGlass`). The Org-level prep
+   script's `outputs-json` exposes these as `customer_admin_role_arns`.
 5. **The AxelSpire-supplied hand-off bundle** for this customer:
    - `axelspire_artifact_kms_key_arn` — alias ARN of the AxelSpire-owned CI
      CMK that will encrypt the Terraform state and Lambda code zips for

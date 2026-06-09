@@ -7,7 +7,18 @@ succeeds and the customer has shared the role ARN.
 
 ## Prerequisites
 
-1. An AWS account in the customer's AWS Organization, dedicated to 3AM.
+1. An AWS account that will host the 3AM workload, with the
+   `3am-region-deny` / `3am-root-user-deny` SCPs and the
+   `PlatformAdmin` / `BreakGlass` Identity Center setup already in place.
+   Two CloudShell helpers can produce that end-state in one re-entrant
+   pass:
+   [`_scripts/customer-org-setup.sh`](../../_scripts/customer-org-setup.sh)
+   (creates a dedicated child account in a `3AM` OU — recommended) or
+   [`_scripts/single-account-setup.sh`](../../_scripts/single-account-setup.sh)
+   (uses the current Org-management account as the workload account —
+   small customers / POCs). See the
+   [README → Org-level prep](../../README.md#org-level-prep-optional)
+   section.
 2. Admin credentials for that account (e.g. an SSO role with
    `AdministratorAccess` or an equivalently-scoped custom role).
 3. A Secrets Manager secret named `/3am/license/external-id` in the
