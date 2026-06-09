@@ -91,10 +91,18 @@ Commands:
   help         Show this help.
 
 Required on first apply (subsequent runs reuse existing resources):
-  --customer-name NAME          Customer display name, e.g. "Acme Corp".
+  --breakglass-user EMAIL       First member of the break-glass group.
+                                Must be a deliberate choice; not
+                                auto-derived. Ideally a different
+                                identity from the platform admin. Not
+                                required with --external-idp.
+
+Auto-derived from the calling AWS account when omitted:
+  --customer-name NAME          Customer display name. Default: the IAM
+                                account alias if set, else "account-<ID>".
   --platform-admin-user EMAIL   First member of the platform-admin group
                                 (UserName in Identity Center directory).
-  --breakglass-user EMAIL       First member of the break-glass group.
+                                Default: Organization MasterAccountEmail.
 
 Optional:
   --allowed-regions LIST        CSV, default: "eu-west-1,us-east-1".
@@ -118,7 +126,11 @@ Outputs commands take no per-customer flags; they re-resolve every value
 from AWS using the group / permission-set names.
 
 Examples:
-  # First run
+  # Minimal: customer-name and platform-admin auto-derived from AWS
+  ./single-account-setup.sh apply \
+    --breakglass-user bob@acme.example.com
+
+  # Explicit override of every input
   ./single-account-setup.sh apply \
     --customer-name "Acme Corp" \
     --platform-admin-user alice@acme.example.com \
@@ -458,25 +470,56 @@ resolve_reserved_sso_role_arn () {
   echo "$role_arn"
 }
 
+# Fill in --customer-name and --platform-admin-user from AWS when the
+# operator did not supply them. --breakglass-user is never auto-derived:
+# the break-glass identity must be a deliberate choice, ideally distinct
+# from the platform-admin identity. Called after preflight so
+# ACCOUNT_ID is already resolved.
+resolve_apply_defaults () {
+  local master_email alias
+  if [ -z "$CUSTOMER_NAME" ]; then
+    alias=$(aws iam list-account-aliases --query 'AccountAliases[0]' --output text 2>/dev/null || echo None)
+    if [ "$alias" != "None" ] && [ -n "$alias" ]; then
+      CUSTOMER_NAME="$alias"
+      log "auto-resolved --customer-name from IAM account alias: ${CUSTOMER_NAME}"
+    else
+      CUSTOMER_NAME="account-${ACCOUNT_ID}"
+      log "no IAM account alias set; defaulting --customer-name to: ${CUSTOMER_NAME}"
+    fi
+  fi
+  if ! ${EXTERNAL_IDP} && [ -z "$PLATFORM_ADMIN_USER" ]; then
+    master_email=$(aws organizations describe-organization \
+                    --query 'Organization.MasterAccountEmail' \
+                    --output text 2>/dev/null || echo "")
+    [ -n "$master_email" ] || die "could not auto-resolve --platform-admin-user from Organization.MasterAccountEmail; pass it explicitly"
+    PLATFORM_ADMIN_USER="$master_email"
+    log "auto-resolved --platform-admin-user from Organization.MasterAccountEmail: ${PLATFORM_ADMIN_USER}"
+  fi
+  if ! ${EXTERNAL_IDP} && [ "$PLATFORM_ADMIN_USER" = "$BREAKGLASS_USER" ]; then
+    log "WARNING: --platform-admin-user and --breakglass-user are the same identity (${PLATFORM_ADMIN_USER}). For production, use a separate break-glass identity."
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # apply — full setup, idempotent
 # ---------------------------------------------------------------------------
 do_apply () {
-  [ -n "$CUSTOMER_NAME" ]       || die "--customer-name required"
   if ! ${EXTERNAL_IDP}; then
-    [ -n "$PLATFORM_ADMIN_USER" ] || die "--platform-admin-user required (or pass --external-idp)"
-    [ -n "$BREAKGLASS_USER" ]     || die "--breakglass-user required (or pass --external-idp)"
+    [ -n "$BREAKGLASS_USER" ] || die "--breakglass-user required (or pass --external-idp)"
   fi
 
   preflight
+  resolve_apply_defaults
 
   say
-  say "Customer:        ${CUSTOMER_NAME}"
-  say "Target account:  ${ACCOUNT_ID} (current caller — used as workload account)"
-  say "Allowed regions: ${ALLOWED_REGIONS_CSV}"
-  say "Identity Center: ${INSTANCE_ARN}"
-  say "External IdP:    ${EXTERNAL_IDP}"
-  say "Skip SCPs:       ${SKIP_SCPS}"
+  say "Customer:           ${CUSTOMER_NAME}"
+  say "Target account:     ${ACCOUNT_ID} (current caller — used as workload account)"
+  say "Allowed regions:    ${ALLOWED_REGIONS_CSV}"
+  say "Identity Center:    ${INSTANCE_ARN}"
+  say "Platform admin:     ${PLATFORM_ADMIN_USER:-<external IdP>}"
+  say "Break-glass:        ${BREAKGLASS_USER:-<external IdP>}"
+  say "External IdP:       ${EXTERNAL_IDP}"
+  say "Skip SCPs:          ${SKIP_SCPS}"
   say
   if ! ${AUTO_APPROVE}; then
     read -r -p "Proceed? [y/N] " ans

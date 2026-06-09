@@ -49,12 +49,12 @@ chmod +x customer-org-setup.sh
 ./customer-org-setup.sh outputs-json > org-setup.json
 
 # Single-account (use the current account as the 3AM workload)
+# --customer-name and --platform-admin-user are auto-derived from
+# the IAM account alias and Organization.MasterAccountEmail; only
+# --breakglass-user is mandatory (must be a deliberate identity).
 curl -fsSLO https://raw.githubusercontent.com/Axelspire/3am-infra-bootstrap/main/_scripts/single-account-setup.sh
 chmod +x single-account-setup.sh
-./single-account-setup.sh apply \
-  --customer-name "Acme Corp" \
-  --platform-admin-user alice@acme.example.com \
-  --breakglass-user bob@acme.example.com
+./single-account-setup.sh apply --breakglass-user bob@acme.example.com
 ./single-account-setup.sh outputs-json > org-setup.json
 ```
 
