@@ -115,10 +115,24 @@ To resolve:
 3. Console → **IAM Identity Center** → **Enable**. Wait until the
    landing page shows the instance ARN and identity store ID (usually
    under a minute).
-4. In CloudShell, switch the region to match: `export AWS_REGION=eu-west-1`
-   (or whatever home region you picked).
-5. Re-run the same script invocation. It is idempotent — any work it
-   completed before failing is detected and reused.
+4. Point the script at the home region. Two equivalent options:
+
+   ```sh
+   # (a) one-off: set AWS_REGION just for this invocation
+   AWS_REGION=eu-west-1 ./single-account-setup.sh apply \
+     --breakglass-user bob@acme.example.com
+
+   # (b) persistent for the rest of the CloudShell session
+   export AWS_REGION=eu-west-1
+   ./single-account-setup.sh apply --breakglass-user bob@acme.example.com
+   ```
+
+   Replace `eu-west-1` with whichever home region you picked. The
+   `AWS_REGION=… ./script.sh …` prefix form is the quickest fix when
+   the failure message is still on screen — copy-paste the exact
+   command the script printed.
+5. The scripts are idempotent — any work completed before the failure
+   is detected and reused on the next run.
 
 > **The "Global" indicator in the AWS console does not apply to
 > CloudShell.** Pages like Organizations, IAM, and the AWS Accounts
