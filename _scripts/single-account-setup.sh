@@ -179,6 +179,10 @@ preflight () {
   [ -n "$ACCOUNT_ID" ] && [ "$ACCOUNT_ID" != "None" ] || die "could not resolve caller account ID"
   log "preflight: caller account = ${ACCOUNT_ID}"
 
+  EFFECTIVE_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-$(aws configure get region 2>/dev/null || true)}}"
+  [ -n "$EFFECTIVE_REGION" ] || EFFECTIVE_REGION="<unset>"
+  log "preflight: effective region = ${EFFECTIVE_REGION} (regional APIs e.g. sso-admin target this region)"
+
   log "preflight: organization feature set"
   local fs mgmt
   fs=$(aws organizations describe-organization \
@@ -198,7 +202,7 @@ preflight () {
   INSTANCE_ARN=$(aws sso-admin list-instances --query 'Instances[0].InstanceArn' --output text 2>/dev/null || echo None)
   IDSTORE_ID=$(aws sso-admin list-instances --query 'Instances[0].IdentityStoreId' --output text 2>/dev/null || echo None)
   if [ "$INSTANCE_ARN" = "None" ] || [ -z "$INSTANCE_ARN" ]; then
-    die "IAM Identity Center is not enabled in this region. Enable it in the console (one-time, Org-mgmt account) and re-run."
+    die "IAM Identity Center is not enabled in region '${EFFECTIVE_REGION}'. Enable it in the console (one-time, Org-mgmt account) — or if it is already enabled in a different region, re-run with: AWS_REGION=<that-region> $0 ${COMMAND}"
   fi
   log "preflight: Identity Center instance = ${INSTANCE_ARN}"
   log "preflight: identity store = ${IDSTORE_ID}"
@@ -514,6 +518,7 @@ do_apply () {
   say
   say "Customer:           ${CUSTOMER_NAME}"
   say "Target account:     ${ACCOUNT_ID} (current caller — used as workload account)"
+  say "Effective region:   ${EFFECTIVE_REGION}"
   say "Allowed regions:    ${ALLOWED_REGIONS_CSV}"
   say "Identity Center:    ${INSTANCE_ARN}"
   say "Platform admin:     ${PLATFORM_ADMIN_USER:-<external IdP>}"

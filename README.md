@@ -111,8 +111,12 @@ To resolve:
 > `aws sso-admin list-instances`, which is region-scoped: if you
 > enabled Identity Center in `eu-west-1` but CloudShell is in
 > `us-east-1`, the script will still report it as "not enabled".
-> Check the active region with `aws configure list` or
-> `echo "$AWS_REGION"` before re-running.
+>
+> Both scripts log their effective region at the start of preflight
+> (`preflight: effective region = …`) and include it in the failure
+> message, so the mismatch is obvious. To re-run in a different
+> region, prefix with `AWS_REGION=<region>` — the failure message
+> spells out the exact command.
 
 ---
 
