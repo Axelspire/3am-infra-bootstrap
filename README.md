@@ -55,7 +55,8 @@ chmod +x customer-org-setup.sh
   --customer-name "Acme Corp" \
   --account-email aws-3am@acme.example.com \
   --platform-admin-user alice@acme.example.com \
-  --breakglass-user bob@acme.example.com
+  --breakglass-user bob@acme.example.com \
+  --allowed-regions "eu-west-1,us-east-1"
 ./customer-org-setup.sh outputs-json > org-setup.json
 
 # Single-account (use the current account as the 3AM workload)
@@ -64,9 +65,26 @@ chmod +x customer-org-setup.sh
 # --breakglass-user is mandatory (must be a deliberate identity).
 curl -fsSLO https://raw.githubusercontent.com/Axelspire/3am-infra-bootstrap/main/_scripts/single-account-setup.sh
 chmod +x single-account-setup.sh
-./single-account-setup.sh apply --breakglass-user bob@acme.example.com
+./single-account-setup.sh apply \
+  --breakglass-user bob@acme.example.com \
+  --allowed-regions "eu-west-1,us-east-1"
 ./single-account-setup.sh outputs-json > org-setup.json
 ```
+
+`--allowed-regions` (CSV, default `eu-west-1,us-east-1`) is the
+parameter for the `3am-region-deny` SCP. Anything not in the list is
+denied for non-global services; IAM, Organizations, Route 53,
+CloudFront, WAF, STS, KMS, S3 account-level reads, Health, Tag and
+Global Accelerator are always exempt because they're global or
+control-plane services. Include at minimum your primary workload
+region and `us-east-1` (CloudFront, ACM-for-CloudFront and several
+global services have hidden `us-east-1` API hops).
+
+Re-running either script with a different `--allowed-regions` value
+calls `organizations:UpdatePolicy` on the existing SCP, so the policy
+body is rewritten in-place and all existing attachments pick up the
+new region list immediately. The policy name, ID and attachments do
+not change.
 
 Logs are written to `$HOME/3am-{org,single-account}-setup-<utc>.log`.
 `outputs-json` re-resolves every value from AWS by name and includes

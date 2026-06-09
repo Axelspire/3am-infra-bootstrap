@@ -265,10 +265,10 @@ move_account_if_needed () {
 
 get_or_create_scp () {
   local name=$1 file=$2 id
+  [ -f "$file" ] || die "policy file not found: ${file}"
   id=$(aws organizations list-policies --filter SERVICE_CONTROL_POLICY \
         --query "Policies[?Name==\`${name}\`].Id | [0]" --output text)
   if [ "$id" = "None" ] || [ -z "$id" ]; then
-    [ -f "$file" ] || die "policy file not found: ${file}"
     log "creating SCP '${name}' from ${file}" >&2
     id=$(aws organizations create-policy \
           --name "${name}" --type SERVICE_CONTROL_POLICY \
@@ -276,7 +276,9 @@ get_or_create_scp () {
           --content "file://${file}" \
           --query 'Policy.PolicySummary.Id' --output text)
   else
-    log "reusing SCP '${name}' = ${id}" >&2
+    log "updating SCP '${name}' (${id}) body from ${file}" >&2
+    aws organizations update-policy --policy-id "${id}" \
+      --content "file://${file}" >/dev/null
   fi
   echo "$id"
 }
