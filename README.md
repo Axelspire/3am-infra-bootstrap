@@ -1311,6 +1311,21 @@ default key policy with:
           ]
         }
       }
+    },
+    {
+      "Sid": "AllowCustomerAccountCreateGrantForAWSServices",
+      "Effect": "Allow",
+      "Principal": { "AWS": "*" },
+      "Action": "kms:CreateGrant",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:PrincipalAccount": "<customer-account-id>"
+        },
+        "Bool": {
+          "kms:GrantIsForAWSResource": "true"
+        }
+      }
     }
   ]
 }
@@ -1320,6 +1335,32 @@ The `AllowCustomerAccountDataPlane` statement is what makes the
 state bucket and lock table actually work on the customer side.
 `aws:PrincipalAccount` pins it to the specific customer account, so
 no other AWS account can ever use this key — even by accident.
+
+The separate `AllowCustomerAccountCreateGrantForAWSServices`
+statement covers `kms:CreateGrant` specifically. DynamoDB
+`CreateTable` against a customer-managed CMK installs a per-table
+grant on the caller's behalf at table-creation time and fails
+without this permission. The `kms:GrantIsForAWSResource=true`
+condition restricts it to grants AWS services themselves create
+(S3, DynamoDB) — the customer account cannot mint arbitrary grants
+of its own against the key, preserving the kill-switch model.
+
+`kms:CreateGrant` has to live in its own statement because the
+`Bool` condition `kms:GrantIsForAWSResource` only applies to grant
+operations; combining it with `Encrypt`/`Decrypt`/etc in a single
+statement would make those non-grant calls fail the condition and
+get denied. `kms:ViaService` is intentionally omitted on the grant
+statement — the grant is made by the service on the caller's
+behalf, and AWS recommends `kms:GrantIsForAWSResource` as the
+canonical guard for that path.
+
+`GitHubActions-CustomerDeploy` deliberately does **not** receive
+`kms:CreateGrant`. At runtime the GHA role `AssumeRole`s into the
+customer's `ThreeAM-Deployment` role and only performs
+`GetItem`/`PutItem` against the existing lock row — no new
+encrypted resources are ever created from the AxelSpire side, so
+grant-management permission would be unused and would weaken the
+boundary.
 
 ### Step 3 — Capture the real key ARN
 
