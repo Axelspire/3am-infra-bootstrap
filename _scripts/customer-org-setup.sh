@@ -161,9 +161,25 @@ Optional:
 Phase 5 tuning (defaults are correct for the standard AxelSpire setup):
   --axelspire-ci-account-id ID  Default: 033113129683.
   --axelspire-ci-region REGION  Default: eu-west-1. Used to derive the
-                                AxelSpire CI KMS key and artifacts bucket
-                                ARNs deterministically.
+                                AxelSpire CI artifacts bucket ARN
+                                deterministically and as a documentation
+                                hint for the alias ARN.
   --axelspire-ci-role-name NAME Default: GitHubActions-CustomerDeploy.
+  --axelspire-artifact-kms-key-arn ARN
+                                Real key ARN (NOT an alias ARN) of the
+                                AxelSpire-owned CI CMK that encrypts this
+                                customer's state bucket and DynamoDB lock
+                                table. DynamoDB rejects cross-account
+                                alias ARNs at CreateTable, so the key
+                                must be pre-provisioned by AxelSpire and
+                                its real ARN supplied here. Required for
+                                'apply' unless --skip-bootstrap is set.
+  --axelspire-artifact-s3-bucket-arn ARN
+                                Override the deterministic
+                                arn:aws:s3:::3am-ci-artifacts-<ci-acct>-
+                                <ci-region> bucket ARN. Optional;
+                                documentation-only (no API calls in this
+                                script reference it).
   --external-id-secret-name N   Default: /3am/license/external-id.
                                 Auto-created (32-byte hex) if missing.
   --no-license-session-tag      Drop the aws:RequestTag/LicenseValid
@@ -217,6 +233,8 @@ parse_args () {
       --axelspire-ci-account-id)   AXELSPIRE_CI_ACCOUNT_ID="$2"; shift 2 ;;
       --axelspire-ci-region)       AXELSPIRE_CI_REGION="$2"; shift 2 ;;
       --axelspire-ci-role-name)    AXELSPIRE_CI_ROLE_NAME="$2"; shift 2 ;;
+      --axelspire-artifact-kms-key-arn)    AXELSPIRE_ARTIFACT_KMS_KEY_ARN="$2"; shift 2 ;;
+      --axelspire-artifact-s3-bucket-arn)  AXELSPIRE_ARTIFACT_S3_BUCKET_ARN="$2"; shift 2 ;;
       --external-id-secret-name)   EXTERNAL_ID_SECRET_NAME="$2"; shift 2 ;;
       --no-license-session-tag)    REQUIRE_LICENSE_SESSION_TAG=false; shift ;;
       --kms-multi-region)          KMS_MULTI_REGION=true; shift ;;
@@ -643,12 +661,19 @@ resolve_customer_id () {
   echo "${CUSTOMER_ID}" | grep -qE '^[a-z0-9-]+$' || die "--customer-id '${CUSTOMER_ID}' must be lowercase alphanumeric with hyphens only"
 }
 
-# Derive the AxelSpire-side ARNs deterministically from --customer-id
-# and the AxelSpire CI account/region. AxelSpire's customer-onboard
-# workflow uses the same formulas.
+# Derive the AxelSpire-side ARNs. The S3 bucket ARN follows a
+# deterministic naming convention. The KMS value falls back to a
+# documentation-only alias ARN — DynamoDB CreateTable will reject
+# cross-account alias ARNs, so 'apply' requires the operator to
+# pass the real key ARN via --axelspire-artifact-kms-key-arn.
+# CLI-supplied values (set by parse_args) are preserved.
 phase5_compute_axelspire_arns () {
-  AXELSPIRE_ARTIFACT_KMS_KEY_ARN="arn:${PARTITION}:kms:${AXELSPIRE_CI_REGION}:${AXELSPIRE_CI_ACCOUNT_ID}:alias/3am-ci/${CUSTOMER_ID}"
-  AXELSPIRE_ARTIFACT_S3_BUCKET_ARN="arn:${PARTITION}:s3:::3am-ci-artifacts-${AXELSPIRE_CI_ACCOUNT_ID}-${AXELSPIRE_CI_REGION}"
+  if [ -z "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" ]; then
+    AXELSPIRE_ARTIFACT_KMS_KEY_ARN="arn:${PARTITION}:kms:${AXELSPIRE_CI_REGION}:${AXELSPIRE_CI_ACCOUNT_ID}:alias/3am-ci/${CUSTOMER_ID}"
+  fi
+  if [ -z "${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}" ]; then
+    AXELSPIRE_ARTIFACT_S3_BUCKET_ARN="arn:${PARTITION}:s3:::3am-ci-artifacts-${AXELSPIRE_CI_ACCOUNT_ID}-${AXELSPIRE_CI_REGION}"
+  fi
 }
 
 # Saved management-account credentials. assume_workload_creds stashes
@@ -1214,6 +1239,14 @@ do_apply () {
   if ! ${EXTERNAL_IDP}; then
     [ -n "$PLATFORM_ADMIN_USER" ] || die "--platform-admin-user required (or pass --external-idp)"
     [ -n "$BREAKGLASS_USER" ]     || die "--breakglass-user required (or pass --external-idp)"
+  fi
+  # The AxelSpire CI CMK encrypts both the customer state bucket and
+  # the DynamoDB lock table. DynamoDB rejects cross-account alias
+  # ARNs at CreateTable, so the real key ARN must be supplied. Bail
+  # out before any AWS write if Phase 5 is in scope and the flag is
+  # missing.
+  if ! ${SKIP_BOOTSTRAP} && [ -z "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" ]; then
+    die "--axelspire-artifact-kms-key-arn is required for 'apply' (Phase 5 encrypts the state bucket and lock table with AxelSpire's CI CMK; DynamoDB requires the real key ARN, not an alias ARN). Coordinate with AxelSpire to obtain the per-customer CI CMK ARN, or pass --skip-bootstrap to run Phase 0 only."
   fi
 
   preflight
