@@ -978,11 +978,28 @@ phase5_put_role_inline_policies () {
 }
 
 phase5_put_cmk_policy () {
+  # KMS validates every Principal ARN against IAM synchronously. The
+  # ThreeAM-Deployment role is created moments before this call, and
+  # AWSReservedSSO_* roles can be similarly fresh, so KMS may still
+  # see them as "invalid principal" for a few seconds. Retry on that
+  # specific error with bounded backoff; any other error fails fast.
   log "putting key policy on ${CUSTOMER_CMK_ALIAS}"
-  aws kms put-key-policy \
-    --key-id "${CUSTOMER_CMK_KEY_ID}" \
-    --policy-name default \
-    --policy "file://${CMK_POLICY_FILE}" >/dev/null
+  local attempts=8 i=1 err
+  while :; do
+    err=$(aws kms put-key-policy \
+            --key-id "${CUSTOMER_CMK_KEY_ID}" \
+            --policy-name default \
+            --policy "file://${CMK_POLICY_FILE}" 2>&1 >/dev/null) && return 0
+    if ! echo "${err}" | grep -q "MalformedPolicyDocumentException"; then
+      echo "${err}" >&2
+      die "put-key-policy failed on ${CUSTOMER_CMK_ALIAS}"
+    fi
+    [ ${i} -ge ${attempts} ] && { echo "${err}" >&2; \
+      die "put-key-policy: principals still invalid after $((attempts*8))s (check PA/BG/ThreeAM-Deployment ARNs in ${CMK_POLICY_FILE})"; }
+    log "  …KMS reports invalid principal (attempt ${i}/${attempts}); waiting 8s for IAM propagation"
+    sleep 8
+    i=$((i+1))
+  done
 }
 
 phase5_get_or_create_external_id_secret () {
