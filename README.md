@@ -1,28 +1,35 @@
 # 3am-infra-bootstrap
 
-A single, versioned [OpenTofu](https://opentofu.org) module that creates the
-**trust anchor** between a customer's AWS account and AxelSpire's deployment
-pipeline. Applied exactly once per customer account, before any other 3AM
-stack can run.
+Creates the **trust anchor** between a customer's AWS account and
+AxelSpire's deployment pipeline. Applied exactly once per customer
+account, before any other 3AM stack can run.
 
-- [Org-level prep (optional)](#org-level-prep-optional)
-- [What you do (checklist)](#what-you-do-checklist)
-- [Prerequisites](#prerequisites)
-- [Path A — OpenTofu (recommended)](#path-a--opentofu-recommended)
-- [Path B — AWS CLI v2 (no OpenTofu)](#path-b--aws-cli-v2-no-opentofu)
+The recommended path is the **CloudShell setup script**: one `curl`,
+one `apply`, one JSON file to send to AxelSpire. The script produces
+the same end state as the [OpenTofu module in `deploy/`](deploy/), which
+remains available for customers that prefer to drive bootstrap through
+their existing IaC (see [Appendix A](#appendix-a--opentofu-module-optional))
+and is the canonical source for the
+[security review](docs/REVIEWING.md).
+
+- [Run the setup (CloudShell)](#run-the-setup-cloudshell)
+- [The output JSON](#the-output-json)
+- [Troubleshooting](#troubleshooting)
 - [Hand-off to AxelSpire](#hand-off-to-axelspire)
 - [Verify the apply](#verify-the-apply)
-- [Reference](#reference) — who runs it, what it creates, security model, inputs/outputs
+- [Reference](#reference) — what it creates, where it fits, security model
+- [Appendix A — OpenTofu module (optional)](#appendix-a--opentofu-module-optional)
+- [Appendix B — Manual AWS CLI walkthrough (reference only)](#appendix-b--manual-aws-cli-walkthrough-reference-only)
 
 ---
 
-## Org-level prep (optional)
+## Run the setup (CloudShell)
 
-Two helper scripts are available, depending on the account topology you
-want. Both run in AWS CloudShell against the customer's Org-management
-account, both are idempotent (`list → create-if-missing` for every
-resource), both embed their SCP bodies as heredocs (single-file `curl`
-deploy), and both expose the same `apply` / `preflight` / `outputs` /
+Two variants of the same script, depending on account topology. Both
+run in AWS CloudShell against the customer's Org-management account,
+both are idempotent (`list → create-if-missing` for every resource),
+both embed their policy bodies as heredocs (single-file `curl` deploy),
+and both expose the same `apply` / `preflight` / `outputs` /
 `outputs-json` sub-commands.
 
 | Variant | Script | When to use |
@@ -87,47 +94,75 @@ new region list immediately. The policy name, ID and attachments do
 not change.
 
 Logs are written to `$HOME/3am-{org,single-account}-setup-<utc>.log`.
-`outputs-json` re-resolves every value from AWS by name and includes
-`customer_admin_role_arns`, which feeds straight into
-[Step 0](#step-0--set-inputs) below.
+`outputs-json` re-resolves every value from AWS by name, so it always
+reflects the live state and is safe to re-run from a fresh session —
+see [The output JSON](#the-output-json) for the schema and
+`jq`-friendly spot-checks.
 
-Skip this section if the 3AM account, SCPs and SSO setup already exist —
-the rest of this document assumes that end-state regardless of how it
-was reached.
+---
 
-### Using the outputs
+## The output JSON
 
-A successful `apply` writes the outputs JSON to CloudShell's persistent
+Each `apply` writes a single hand-off file to CloudShell's persistent
 home so it survives session restarts:
 
-| Script | Outputs file |
+| Script | Output file |
 |---|---|
-| `customer-org-setup.sh` | `$HOME/3am-org-setup-outputs.json` |
-| `single-account-setup.sh` | `$HOME/3am-single-account-setup-outputs.json` |
+| `customer-org-setup.sh` (multi-account) | `$HOME/3am-org-setup-outputs.json` |
+| `single-account-setup.sh` (single-account) | `$HOME/3am-single-account-setup-outputs.json` |
 
-Both files contain the same keys (the multi-account variant adds
-`account_name` and `ou_id`):
+Both files share the same schema: a top-level identity envelope plus
+two nested objects — `phase0` (Identity Center / SCPs) and `phase5`
+(bootstrap: deployment role, customer CMK, state backend, SSM):
 
 ```json
 {
+  "bootstrap_version": "0.1.0",
   "customer_name": "Acme Corp",
-  "account_id": "085068687349",
-  "identity_center_instance_arn": "arn:aws:sso:::instance/ssoins-…",
-  "identity_store_id": "d-90661a8c5a",
-  "region_deny_policy_id": "p-0n0msfyr",
-  "root_user_deny_policy_id": "p-sjxlgst5",
-  "platform_admin_permission_set_arn": "arn:aws:sso:::permissionSet/…",
-  "breakglass_permission_set_arn": "arn:aws:sso:::permissionSet/…",
-  "platform_admins_group_id": "64a8f4a8-…",
-  "breakglass_group_id": "d4e89418-…",
-  "platform_admin_role_arn": "arn:aws:iam::085068687349:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_PlatformAdmin_…",
-  "breakglass_role_arn": "arn:aws:iam::085068687349:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_BreakGlass_…",
-  "customer_admin_role_arns": [
-    "arn:aws:iam::085068687349:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_PlatformAdmin_…",
-    "arn:aws:iam::085068687349:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_BreakGlass_…"
-  ]
+  "customer_id": "acme-corp",
+  "mgmt_account_id": "111111111111",
+  "account_id": "222222222222",
+  "account_name": "3AM-AcmeCorp",
+  "ou_id": "ou-abcd-12345678",
+  "region": "eu-west-1",
+  "partition": "aws",
+  "phase0": {
+    "identity_center_instance_arn": "arn:aws:sso:::instance/ssoins-…",
+    "identity_store_id": "d-90661a8c5a",
+    "region_deny_policy_id": "p-0n0msfyr",
+    "root_user_deny_policy_id": "p-sjxlgst5",
+    "platform_admin_permission_set_arn": "arn:aws:sso:::permissionSet/…",
+    "breakglass_permission_set_arn":     "arn:aws:sso:::permissionSet/…",
+    "platform_admins_group_id": "64a8f4a8-…",
+    "breakglass_group_id":      "d4e89418-…",
+    "platform_admin_role_arn":  "arn:aws:iam::222222222222:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_PlatformAdmin_…",
+    "breakglass_role_arn":      "arn:aws:iam::222222222222:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_BreakGlass_…",
+    "customer_admin_role_arns": ["…PlatformAdmin…", "…BreakGlass…"]
+  },
+  "phase5": {
+    "deployment_role_name":  "ThreeAM-Deployment",
+    "deployment_role_arn":   "arn:aws:iam::222222222222:role/ThreeAM-Deployment",
+    "customer_cmk_alias":    "alias/3am-customer-cmk",
+    "customer_cmk_key_id":   "abcd1234-…",
+    "customer_cmk_arn":      "arn:aws:kms:eu-west-1:222222222222:key/abcd1234-…",
+    "external_id_secret_name": "/3am/license/external-id",
+    "external_id_secret_arn":  "arn:aws:secretsmanager:eu-west-1:222222222222:secret:/3am/license/external-id-…",
+    "state_bucket_name":       "3am-state-222222222222-eu-west-1",
+    "state_lock_table_name":   "3am-state-lock",
+    "axelspire_ci_account_id": "033113129683",
+    "axelspire_ci_region":     "eu-west-1",
+    "axelspire_ci_role_name":  "GitHubActions-CustomerDeploy",
+    "axelspire_artifact_kms_key_arn":   "arn:aws:kms:eu-west-1:033113129683:alias/3am-ci/acme-corp",
+    "axelspire_artifact_s3_bucket_arn": "arn:aws:s3:::3am-ci-artifacts-033113129683-eu-west-1"
+  }
 }
 ```
+
+The **external-ID secret value** is deliberately *not* in this file. It
+is generated inside the workload account at `apply` time and stays in
+Secrets Manager under `/3am/license/external-id`. See
+[Hand-off to AxelSpire](#hand-off-to-axelspire) for how to fetch and
+share it.
 
 Re-running `outputs-json` regenerates the file by re-resolving every
 value from AWS by name, so it always reflects the live state and is
@@ -137,66 +172,36 @@ safe to run from a fresh CloudShell session:
 ./customer-org-setup.sh outputs-json > "$HOME/3am-org-setup-outputs.json"
 ```
 
-#### Feeding the JSON into `acme.tfvars`
+For the multi-account script, `outputs-json` transparently
+`sts:AssumeRole`s into the workload account using
+`OrganizationAccountAccessRole` to re-resolve the `phase5.*` values. If
+that assume fails (e.g. the role was deleted) the `phase5` block is
+emitted with empty strings rather than aborting.
 
-The simplest hand-off to [Step 0](#step-0--set-inputs) is to let `jq`
-write the four account-derived `tfvars` lines for you, then append the
-AxelSpire-supplied hand-off bundle by hand:
-
-```sh
-OUTPUTS=$HOME/3am-org-setup-outputs.json
-CUSTOMER_ID=acme-corp
-REGION=eu-west-1
-AXELSPIRE_CI_ACCOUNT_ID=033113129683
-
-jq -r --arg cid "$CUSTOMER_ID" --arg region "$REGION" \
-      --arg ci  "$AXELSPIRE_CI_ACCOUNT_ID" '
-  "customer_id                      = \"\($cid)\"",
-  "region                           = \"\($region)\"",
-  "axelspire_ci_account_id          = \"\($ci)\"",
-  "customer_admin_role_arns         = " + (.customer_admin_role_arns | tojson)
-' "$OUTPUTS" > acme.tfvars
-
-# Append the hand-off bundle (from the merged AxelSpire customer-onboard PR)
-cat >> acme.tfvars <<EOF
-axelspire_artifact_kms_key_arn   = "arn:aws:kms:${REGION}:${AXELSPIRE_CI_ACCOUNT_ID}:alias/3am-ci/${CUSTOMER_ID}"
-axelspire_artifact_s3_bucket_arn = "arn:aws:s3:::3am-ci-artifacts-${AXELSPIRE_CI_ACCOUNT_ID}-${REGION}"
-EOF
-
-# Optional: normalise list formatting (jq emits arrays on one line)
-tofu fmt acme.tfvars  # or: terraform fmt acme.tfvars
-```
-
-#### Populating the Step 0 environment variables
-
-If you prefer the env-var form of [Step 0](#step-0--set-inputs) over a
-tfvars file (e.g. for Path B / AWS CLI), the same JSON drives both:
+### Spot-checks before sending the JSON
 
 ```sh
 OUTPUTS=$HOME/3am-org-setup-outputs.json
 
-export ACCOUNT_ID=$(jq -r .account_id "$OUTPUTS")
-export CUSTOMER_ADMIN_ROLE_ARNS=$(jq -c .customer_admin_role_arns "$OUTPUTS")
-```
-
-#### Spot-checks before moving on
-
-```sh
 # Both AWSReservedSSO role ARNs resolved (not pending)?
-jq '.customer_admin_role_arns | length' "$HOME/3am-org-setup-outputs.json"
+jq '.phase0.customer_admin_role_arns | length' "$OUTPUTS"
 # → 2
 
-# Region-deny SCP contents match what you passed in --allowed-regions?
+# Region-deny SCP body matches what you passed in --allowed-regions?
 aws organizations describe-policy \
-  --policy-id "$(jq -r .region_deny_policy_id "$HOME/3am-org-setup-outputs.json")" \
+  --policy-id "$(jq -r .phase0.region_deny_policy_id "$OUTPUTS")" \
   --query 'Policy.Content' --output text | python3 -m json.tool | head -20
+
+# Phase 5 fully applied?
+jq '.phase5 | {deployment_role_arn, customer_cmk_arn, state_bucket_name, external_id_secret_arn}' "$OUTPUTS"
 ```
 
-If `customer_admin_role_arns` has fewer than two entries, the first
-account assignment hasn't finished provisioning yet — wait a minute
-and re-run `outputs-json` to regenerate the file.
+If any `phase5.*` value is empty, re-run `apply` — every step is
+idempotent.
 
-### Troubleshooting
+---
+
+## Troubleshooting
 
 **`IAM Identity Center is not enabled in this region. Enable it in the console (one-time, Org-mgmt account) and re-run.`**
 
@@ -253,90 +258,198 @@ To resolve:
 
 ---
 
-## What you do (checklist)
+## Hand-off to AxelSpire
 
-Pick **one** path (A or B). Both produce the same resources in the same
-customer account.
+The setup script writes a single hand-off file to CloudShell's
+persistent home — `$HOME/3am-org-setup-outputs.json` (multi-account)
+or `$HOME/3am-single-account-setup-outputs.json` (single-account).
+Send that file to AxelSpire over the agreed secure channel. It
+contains every ARN/ID that AxelSpire's `customer-onboard` workflow
+needs (see [The output JSON](#the-output-json) for the schema).
 
-- [ ] **Step 0.** Gather inputs (account ID, region, AxelSpire CI account ID,
-      customer admin role ARNs, **plus the AxelSpire-supplied hand-off
-      bundle** — `axelspire_artifact_kms_key_arn` and
-      `axelspire_artifact_s3_bucket_arn`, produced by AxelSpire's
-      `customer-onboard` workflow once the onboarding PR is merged).
-- [ ] **Step 1.** Create the external-ID secret in Secrets Manager.
-- [ ] **Step 2.** Run **Path A** (OpenTofu) **or** **Path B** (AWS CLI v2).
-- [ ] **Step 3.** Capture the hand-off bundle and share it with AxelSpire
-      over the agreed secure channel.
-- [ ] **Step 4.** Run the verification commands.
+The **external-ID secret value** is intentionally not in the JSON
+(only its ARN, under `phase5.external_id_secret_arn`). It must be
+shared separately. To read it:
+
+```sh
+# Single-account: read directly from the current account.
+aws secretsmanager get-secret-value \
+  --secret-id /3am/license/external-id \
+  --query SecretString --output text
+
+# Multi-account: assume into the workload account first.
+OUTPUTS=$HOME/3am-org-setup-outputs.json
+ACCOUNT_ID=$(jq -r .account_id "$OUTPUTS")
+PARTITION=$(jq  -r .partition  "$OUTPUTS")
+eval "$(aws sts assume-role \
+         --role-arn "arn:${PARTITION}:iam::${ACCOUNT_ID}:role/OrganizationAccountAccessRole" \
+         --role-session-name read-external-id \
+         --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+         --output text \
+       | awk '{print "export AWS_ACCESS_KEY_ID="$1"; export AWS_SECRET_ACCESS_KEY="$2"; export AWS_SESSION_TOKEN="$3}')"
+aws secretsmanager get-secret-value \
+  --secret-id /3am/license/external-id \
+  --query SecretString --output text
+unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+```
+
+The customer owns and rotates this secret at any time; the setup
+script reuses it on re-run rather than regenerating it. See
+[`docs/REVIEWING.md`](docs/REVIEWING.md) § "Hand-off" for the channel
+specifics.
 
 ---
 
-## Prerequisites
+## Verify the apply
 
-1. An AWS account in the customer's AWS Organization, dedicated to 3AM.
-   See [Org-level prep](#org-level-prep-optional) if it doesn't exist yet.
-2. Admin credentials for that account (e.g. an SSO role with
-   `AdministratorAccess`). The AxelSpire CI role is **not** sufficient — this
-   module must run before that role exists.
-3. The AxelSpire CI account ID (fixed: `033113129683`).
-4. One or more customer admin role ARNs that will hold key-management rights
-   on the CMK (e.g. `PlatformAdmin`, `BreakGlass`). The Org-level prep
-   script's `outputs-json` exposes these as `customer_admin_role_arns`.
-5. **The AxelSpire-supplied hand-off bundle** for this customer:
-   - `axelspire_artifact_kms_key_arn` — alias ARN of the AxelSpire-owned CI
-     CMK that will encrypt the Terraform state and Lambda code zips for
-     this customer. Form:
-     `arn:aws:kms:<ci-region>:<ci-account>:alias/3am-ci/<customer-id>`.
-   - `axelspire_artifact_s3_bucket_arn` — ARN of the shared CI artifacts
-     S3 bucket. Form: `arn:aws:s3:::3am-ci-artifacts-<ci-account>-<ci-region>`.
-   These appear in the body of the AxelSpire `customer-onboard` PR and
-   become resolvable in AWS the moment that PR is merged.
-6. For Path A: OpenTofu `>= 1.6` (Terraform `>= 1.5` also works), AWS
-   provider `~> 5.60`.
-7. For Path B: AWS CLI v2, `jq`, `openssl`.
-
-### Step 0 — set inputs
+These commands run *inside the workload account*. For the
+multi-account script, assume `OrganizationAccountAccessRole` first
+using the same snippet as the external-ID read above.
 
 ```sh
-export AWS_PROFILE=customer-admin
-export AWS_REGION=eu-west-1
-
-export CUSTOMER_ID=acme-corp
-export AXELSPIRE_CI_ACCOUNT_ID=033113129683
-export AXELSPIRE_CI_ROLE_NAME=GitHubActions-CustomerDeploy
-export CUSTOMER_ADMIN_ROLE_ARNS='["arn:aws:iam::123456789012:role/PlatformAdmin","arn:aws:iam::123456789012:role/BreakGlass"]'
-
-# Hand-off bundle from AxelSpire (see the merged customer-onboard PR body).
-export AXELSPIRE_ARTIFACT_KMS_KEY_ARN="arn:aws:kms:eu-west-1:${AXELSPIRE_CI_ACCOUNT_ID}:alias/3am-ci/${CUSTOMER_ID}"
-export AXELSPIRE_ARTIFACT_S3_BUCKET_ARN="arn:aws:s3:::3am-ci-artifacts-${AXELSPIRE_CI_ACCOUNT_ID}-eu-west-1"
-
-export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-export PARTITION=aws
+aws iam get-role --role-name ThreeAM-Deployment --query Role.Arn
+aws kms describe-key --key-id alias/3am-customer-cmk --query KeyMetadata.Arn
+aws s3api head-bucket --bucket "3am-state-$(aws sts get-caller-identity --query Account --output text)-${AWS_REGION:-eu-west-1}"
+aws dynamodb describe-table --table-name 3am-state-lock --query Table.TableStatus
+aws ssm get-parameters-by-path --path /3am --recursive --query 'Parameters[].Name'
 ```
 
-### Step 1 — create the external-ID secret
+All five commands should succeed and the SSM list should contain at
+least nine `/3am/...` entries (including the two `/3am/axelspire/*`
+paths).
 
-The customer owns and rotates this secret. AxelSpire gets the current value
-out-of-band; it is **not** in any Terraform output.
+A quick equivalence check directly from the hand-off JSON, without
+assuming into the workload account:
 
 ```sh
-aws secretsmanager create-secret \
-  --name /3am/license/external-id \
-  --secret-string "$(openssl rand -hex 32)"
-
-export EXTERNAL_ID_SECRET_ARN=$(aws secretsmanager describe-secret \
-  --secret-id /3am/license/external-id --query ARN --output text)
+OUTPUTS=$HOME/3am-org-setup-outputs.json
+jq -e '
+  .phase5
+  | (.deployment_role_arn        // "") != ""
+  and (.customer_cmk_arn          // "") != ""
+  and (.state_bucket_name         // "") != ""
+  and (.external_id_secret_arn    // "") != ""
+' "$OUTPUTS" >/dev/null \
+  && echo "OK: every phase5 ARN is populated" \
+  || echo "phase5 incomplete — re-run apply"
 ```
 
 ---
 
-## Path A — OpenTofu (recommended)
+## Reference
 
-Runs the module in [`deploy/`](deploy/). See
-[`examples/customer-applied/`](examples/customer-applied/) for the full
-wrapping example, and [`examples/axelspire-provisioned/`](examples/axelspire-provisioned/)
-for the managed-onboarding variant (AxelSpire creates the account first,
-then transfers it to the customer's Organization).
+### Who runs it
+
+Two patterns are supported. Both result in the same end state — the
+customer owns every resource and can revoke AxelSpire's access without
+involving AxelSpire.
+
+| Pattern | Who runs it | When it is appropriate |
+|---|---|---|
+| **Customer-applied** | The customer's platform team, with their own admin credentials, into an account in the customer's AWS Organization. | Default. The customer's security policy requires that no third party perform the initial setup. See [`examples/customer-applied/`](examples/customer-applied/). |
+| **AxelSpire-provisioned** | AxelSpire, into a newly-created AWS account inside the AxelSpire AWS Organization. After bootstrap, the account is invited into the customer's Organization and ownership is transferred. | Optional "managed onboarding" — customer does not have to drive the account-vending process. See [`examples/axelspire-provisioned/`](examples/axelspire-provisioned/). |
+
+In both patterns the apply runs **inside the target customer account**.
+The AxelSpire CI account is a `Principal` in the role's trust policy,
+not a runner of this module.
+
+### What it creates
+
+| Resource | Name | Owned by | Purpose |
+|---|---|---|---|
+| KMS key | `alias/3am-customer-cmk` | Customer | Encryption-at-rest for customer-owned downstream 3AM resources (audit bucket, SSM SecureStrings, application data). |
+| IAM role | `ThreeAM-Deployment` | Customer | Cross-account assume target for AxelSpire CI. No `iam:*`, no `organizations:*`, no broad `s3:*` or `ec2:*`. |
+| IAM role policies | `ThreeAM-Deployment-Permissions{,-Ec2,-Extra}` | Customer | Narrow allow-list scoped by ARN prefix `3am-*` and resource tag `Service=3am`. |
+| Secrets Manager secret | `/3am/license/external-id` | Customer | 32-byte hex external ID used in the deployment role trust policy. |
+| S3 bucket | `3am-state-<account>-<region>` | Customer | Terraform state for every 3AM stack. Versioned, TLS-only, **SSE-KMS using the AxelSpire CI CMK** (kill-switch). |
+| DynamoDB table | `3am-state-lock` | Customer | Terraform state locking. PITR enabled, **SSE-KMS using the AxelSpire CI CMK** (kill-switch). |
+| SSM parameters | `/3am/{kms,state,iam,bootstrap,axelspire}/...` | Customer | Runtime discovery of the above by downstream stacks. |
+| _(reference only)_ KMS key | `alias/3am-ci/<customer-id>` | **AxelSpire CI** | Encrypts customer state + Lambda artifacts. Disabled by AxelSpire at license end to render state and code unreadable without touching customer-owned resources. |
+| _(reference only)_ S3 bucket | `3am-ci-artifacts-<ci-account>-<region>` | **AxelSpire CI** | Shared (per-region) bucket holding encrypted Lambda code zips for all enrolled customers. |
+
+### How it fits the wider 3AM platform
+
+```
+Phase 0  3am-infra-bootstrap          <- this module
+            creates: role, CMK, state bucket, lock table
+
+Phase 1  3am-customer-onboarding      (applied by 3am-deployments)
+            creates: audit bucket, /3am/audit/*, /3am/onboarding/*,
+                     /3am/license/* parameters
+
+Phase 2  3am-infra, 3am-core, 3am-ocsp, 3am-datasink
+            (applied by 3am-deployments, gated by license/approval tier)
+```
+
+See [`3AM_PROJECTS_OVERVIEW.md`](../3AM_PROJECTS_OVERVIEW.md) for the full
+dependency map.
+
+### Inputs and outputs (Appendix A)
+
+See [`deploy/variables.tf`](deploy/variables.tf) and
+[`deploy/outputs.tf`](deploy/outputs.tf). The most important ones:
+
+| Input | Required | Default |
+|---|:---:|---|
+| `customer_id` | ✅ | — |
+| `axelspire_ci_account_id` | ✅ | — |
+| `axelspire_artifact_kms_key_arn` | ✅ | — |
+| `axelspire_artifact_s3_bucket_arn` | ✅ | — |
+| `axelspire_ci_role_name` |  | `GitHubActions-CustomerDeploy` |
+| `external_id_secret_arn` |  | `null` |
+| `customer_admin_role_arns` |  | `[]` |
+| `require_license_session_tag` |  | `true` |
+| `kms_key_rotation_enabled` |  | `true` |
+| `kms_multi_region` |  | `false` |
+
+`output.handoff_values` is the convenience bundle to share with AxelSpire
+(deployment role ARN, CMK ARN, state bucket, lock table, region).
+
+### Security model
+
+- Every resource is owned by the customer account. Revocation requires no
+  AxelSpire involvement: delete the trust statement on `ThreeAM-Deployment`
+  or detach its permission policies, and AxelSpire is locked out within
+  minutes.
+- The `ThreeAM-Deployment` role is scoped by ARN patterns matching `3am-*`
+  and resources tagged `Service=3am`. No `iam:*`, no `organizations:*`, no
+  broad `s3:*` or `ec2:*`.
+- Trust is conditioned on `sts:RoleSessionName` starting with `3am-` /
+  `tg-`, an optional customer-controlled `sts:ExternalId`, and an optional
+  `aws:RequestTag/LicenseValid=true` session tag.
+- The CMK key policy grants AxelSpire only data-plane operations
+  (`Encrypt`, `Decrypt`, `GenerateDataKey`, `DescribeKey`). Key management
+  (rotate, disable, modify policy) stays with the customer.
+
+A security reviewer should be able to read this README,
+[`docs/REVIEWING.md`](docs/REVIEWING.md), [`deploy/iam.tf`](deploy/iam.tf)
+and [`deploy/kms.tf`](deploy/kms.tf) in about 30 minutes and produce an
+informed approval decision.
+
+### Versioning
+
+Semantic versioning. Major bumps for breaking changes to inputs/outputs;
+minor for additive changes; patch for documentation and bug fixes.
+
+---
+
+## Appendix A — OpenTofu module (optional)
+
+The CloudShell setup script in [`_scripts/`](_scripts/) is the
+recommended way to apply this bootstrap. The OpenTofu module in
+[`deploy/`](deploy/) is retained for two purposes:
+
+1. **Customers who run their own IaC** can drive bootstrap through
+   their existing Terraform/OpenTofu pipeline rather than CloudShell.
+2. **Security reviewers** can read `deploy/*.tf` as the canonical
+   declarative form of every resource the script creates (see
+   [`docs/REVIEWING.md`](docs/REVIEWING.md)).
+
+See [`examples/customer-applied/`](examples/customer-applied/) for the
+full wrapping example, and
+[`examples/axelspire-provisioned/`](examples/axelspire-provisioned/)
+for the managed-onboarding variant (AxelSpire creates the account
+first, then transfers it to the customer's Organization).
 
 ### A.1 — write `acme.tfvars`
 
@@ -366,21 +479,39 @@ tofu apply -var-file=acme.tfvars
 tofu output -json handoff_values > handoff.json
 ```
 
-Go to [Hand-off to AxelSpire](#hand-off-to-axelspire).
+Then go to [Hand-off to AxelSpire](#hand-off-to-axelspire).
 
 ---
 
-## Path B — AWS CLI v2 (no OpenTofu)
+## Appendix B — Manual AWS CLI walkthrough (reference only)
 
-This path reproduces the OpenTofu module step-by-step using `aws` CLI v2.
-The resulting resources are identical to Path A — same names, same policies,
-same tags — so a subsequent `tofu import` is possible if the customer later
-adopts OpenTofu.
+Step-by-step `aws` CLI v2 reproduction of the OpenTofu module. The
+setup script in [`_scripts/`](_scripts/) executes these exact API
+calls internally, so most readers will never need this. Use it to:
 
-> Run the steps in order. Each step is idempotent within itself but assumes
-> the previous step has succeeded. Re-running a step that already created
-> its resource will fail with `EntityAlreadyExists` / `BucketAlreadyOwnedByYou`
-> — that is expected and safe; skip to the next step.
+- Audit what the script does without reading the bash source.
+- Recover individual resources manually if a partial failure cannot
+  be remediated by re-running the script.
+- Adopt the resulting resources into a different IaC tool via `import`
+  operations.
+
+The resulting resources are identical to Appendix A — same names,
+same policies, same tags — so a subsequent `tofu import` is possible
+if the customer later adopts OpenTofu.
+
+This walkthrough assumes the workload account, region, and the
+AxelSpire-supplied hand-off values are already set in environment
+variables (`ACCOUNT_ID`, `AWS_REGION`, `PARTITION`, `CUSTOMER_ID`,
+`AXELSPIRE_CI_ACCOUNT_ID`, `AXELSPIRE_CI_ROLE_NAME`,
+`CUSTOMER_ADMIN_ROLE_ARNS`, `AXELSPIRE_ARTIFACT_KMS_KEY_ARN`,
+`AXELSPIRE_ARTIFACT_S3_BUCKET_ARN`, `EXTERNAL_ID_SECRET_ARN`); the
+setup script derives all of these automatically.
+
+> Run the steps in order. Each step is idempotent within itself but
+> assumes the previous step has succeeded. Re-running a step that
+> already created its resource will fail with `EntityAlreadyExists` /
+> `BucketAlreadyOwnedByYou` — that is expected and safe; skip to the
+> next step.
 
 ### B.1 — common tags
 
@@ -791,131 +922,3 @@ jq -n \
     bootstrap_version:                 "0.1.0"
   }' > handoff.json
 ```
-
----
-
-## Hand-off to AxelSpire
-
-Share `handoff.json` and the external-ID value with AxelSpire over the
-agreed secure channel. The external ID is **not** in `handoff.json` —
-fetch it separately:
-
-```sh
-aws secretsmanager get-secret-value \
-  --secret-id /3am/license/external-id \
-  --query SecretString --output text
-```
-
-See [`docs/REVIEWING.md`](docs/REVIEWING.md) § "Hand-off" for the channel
-specifics.
-
----
-
-## Verify the apply
-
-```sh
-aws iam get-role --role-name ThreeAM-Deployment --query Role.Arn
-aws kms describe-key --key-id alias/3am-customer-cmk --query KeyMetadata.Arn
-aws s3api head-bucket --bucket "3am-state-${ACCOUNT_ID}-${AWS_REGION}"
-aws dynamodb describe-table --table-name 3am-state-lock --query Table.TableStatus
-aws ssm get-parameters-by-path --path /3am --recursive --query 'Parameters[].Name'
-```
-
-All five commands should succeed and the SSM list should contain at least
-nine `/3am/...` entries (including the two `/3am/axelspire/*` paths).
-
----
-
-## Reference
-
-### Who runs it
-
-Two patterns are supported. Both result in the same end state — the
-customer owns every resource and can revoke AxelSpire's access without
-involving AxelSpire.
-
-| Pattern | Who runs the module | When it is appropriate |
-|---|---|---|
-| **Customer-applied** | The customer's platform team, with their own admin credentials, into an account in the customer's AWS Organization. | Default. The customer's security policy requires that no third party perform the initial setup. See [`examples/customer-applied/`](examples/customer-applied/). |
-| **AxelSpire-provisioned** | AxelSpire, into a newly-created AWS account inside the AxelSpire AWS Organization. After bootstrap, the account is invited into the customer's Organization and ownership is transferred. | Optional "managed onboarding" — customer does not have to drive the account-vending process. See [`examples/axelspire-provisioned/`](examples/axelspire-provisioned/). |
-
-In both patterns the apply runs **inside the target customer account**. The
-AxelSpire CI account is a `Principal` in the role's trust policy, not a
-runner of this module.
-
-### What it creates
-
-| Resource | Name | Owned by | Purpose |
-|---|---|---|---|
-| KMS key | `alias/3am-customer-cmk` | Customer | Encryption-at-rest for customer-owned downstream 3AM resources (audit bucket, SSM SecureStrings, application data). |
-| IAM role | `ThreeAM-Deployment` | Customer | Cross-account assume target for AxelSpire CI. No `iam:*`, no `organizations:*`, no broad `s3:*` or `ec2:*`. |
-| IAM role policies | `ThreeAM-Deployment-Permissions{,-Ec2,-Extra}` | Customer | Narrow allow-list scoped by ARN prefix `3am-*` and resource tag `Service=3am`. |
-| S3 bucket | `3am-state-<account>-<region>` | Customer | Terraform state for every 3AM stack. Versioned, TLS-only, **SSE-KMS using the AxelSpire CI CMK** (kill-switch). |
-| DynamoDB table | `3am-state-lock` | Customer | Terraform state locking. PITR enabled, **SSE-KMS using the AxelSpire CI CMK** (kill-switch). |
-| SSM parameters | `/3am/{kms,state,iam,bootstrap,axelspire}/...` | Customer | Runtime discovery of the above by downstream stacks. |
-| _(reference only)_ KMS key | `alias/3am-ci/<customer-id>` | **AxelSpire CI** | Encrypts customer state + Lambda artifacts. Disabled by AxelSpire at license end to render state and code unreadable without touching customer-owned resources. |
-| _(reference only)_ S3 bucket | `3am-ci-artifacts-<ci-account>-<region>` | **AxelSpire CI** | Shared (per-region) bucket holding encrypted Lambda code zips for all enrolled customers. |
-
-### How it fits the wider 3AM platform
-
-```
-Phase 0  3am-infra-bootstrap          <- this module
-            creates: role, CMK, state bucket, lock table
-
-Phase 1  3am-customer-onboarding      (applied by 3am-deployments)
-            creates: audit bucket, /3am/audit/*, /3am/onboarding/*,
-                     /3am/license/* parameters
-
-Phase 2  3am-infra, 3am-core, 3am-ocsp, 3am-datasink
-            (applied by 3am-deployments, gated by license/approval tier)
-```
-
-See [`3AM_PROJECTS_OVERVIEW.md`](../3AM_PROJECTS_OVERVIEW.md) for the full
-dependency map.
-
-### Inputs and outputs (Path A)
-
-See [`deploy/variables.tf`](deploy/variables.tf) and
-[`deploy/outputs.tf`](deploy/outputs.tf). The most important ones:
-
-| Input | Required | Default |
-|---|:---:|---|
-| `customer_id` | ✅ | — |
-| `axelspire_ci_account_id` | ✅ | — |
-| `axelspire_artifact_kms_key_arn` | ✅ | — |
-| `axelspire_artifact_s3_bucket_arn` | ✅ | — |
-| `axelspire_ci_role_name` |  | `GitHubActions-CustomerDeploy` |
-| `external_id_secret_arn` |  | `null` |
-| `customer_admin_role_arns` |  | `[]` |
-| `require_license_session_tag` |  | `true` |
-| `kms_key_rotation_enabled` |  | `true` |
-| `kms_multi_region` |  | `false` |
-
-`output.handoff_values` is the convenience bundle to share with AxelSpire
-(deployment role ARN, CMK ARN, state bucket, lock table, region).
-
-### Security model
-
-- Every resource is owned by the customer account. Revocation requires no
-  AxelSpire involvement: delete the trust statement on `ThreeAM-Deployment`
-  or detach its permission policies, and AxelSpire is locked out within
-  minutes.
-- The `ThreeAM-Deployment` role is scoped by ARN patterns matching `3am-*`
-  and resources tagged `Service=3am`. No `iam:*`, no `organizations:*`, no
-  broad `s3:*` or `ec2:*`.
-- Trust is conditioned on `sts:RoleSessionName` starting with `3am-` /
-  `tg-`, an optional customer-controlled `sts:ExternalId`, and an optional
-  `aws:RequestTag/LicenseValid=true` session tag.
-- The CMK key policy grants AxelSpire only data-plane operations
-  (`Encrypt`, `Decrypt`, `GenerateDataKey`, `DescribeKey`). Key management
-  (rotate, disable, modify policy) stays with the customer.
-
-A security reviewer should be able to read this README,
-[`docs/REVIEWING.md`](docs/REVIEWING.md), [`deploy/iam.tf`](deploy/iam.tf)
-and [`deploy/kms.tf`](deploy/kms.tf) in about 30 minutes and produce an
-informed approval decision.
-
-### Versioning
-
-Semantic versioning. Major bumps for breaking changes to inputs/outputs;
-minor for additive changes; patch for documentation and bug fixes.

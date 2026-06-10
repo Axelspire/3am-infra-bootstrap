@@ -1,41 +1,69 @@
 #!/usr/bin/env bash
-# single-account-setup.sh — 3AM Identity Center / SCP setup inside an
-# existing single AWS account.
+# single-account-setup.sh — 3AM full bootstrap inside an existing single
+# AWS account: Identity Center / SCPs (Phase 0) plus the cross-account
+# IAM role, customer CMK, Terraform state backend and SSM parameters
+# (Phase 5). Emits a single handoff.json blob describing everything
+# AxelSpire needs to take over.
 #
 # Use this when the 3AM workload runs in the same AWS account as the Org
 # root (e.g. a freshly-signed-up AWS account that is its own Organization
 # management account — typical for small customers and POCs). The caller's
 # current account is used both as the SCP-owning Org-management context
-# AND as the workload target for IAM Identity Center assignments. No new
-# AWS account is created and no OU shuffle is performed.
+# AND as the workload target for IAM Identity Center assignments and the
+# Phase 5 bootstrap resources. No new AWS account is created and no OU
+# shuffle is performed.
 #
-# For the multi-account variant (creates a new child account in a 3AM OU),
-# use customer-org-setup.sh instead.
+# For the multi-account variant (creates a new child account in a 3AM OU
+# and runs Phase 5 inside it), use customer-org-setup.sh instead.
 #
 # Idempotent: safe to re-run after a partial failure.
 
 set -Eeuo pipefail
 
+BOOTSTRAP_VERSION="0.2.0"
+
 # ---------------------------------------------------------------------------
 # Defaults & globals
 # ---------------------------------------------------------------------------
-# SCP bodies are written to /tmp at runtime (see write_policy_files), so
-# the script remains a single-file curl-and-run.
+# Policy bodies are written to /tmp at runtime (see write_policy_files
+# and phase5_write_policy_files), so the script remains a single-file
+# curl-and-run.
 REGION_POLICY_FILE="/tmp/3am-region-deny.json"
 ROOT_POLICY_FILE="/tmp/3am-root-user-deny.json"
+TRUST_POLICY_FILE="/tmp/3am-deployment-trust.json"
+PERMS_POLICY_FILE="/tmp/3am-deployment-permissions.json"
+PERMS_EC2_FILE="/tmp/3am-deployment-permissions-ec2.json"
+PERMS_EXTRA_FILE="/tmp/3am-deployment-permissions-extra.json"
+CMK_POLICY_FILE="/tmp/3am-customer-cmk-policy.json"
+STATE_BUCKET_POLICY_FILE="/tmp/3am-state-bucket-policy.json"
 
 ALLOWED_REGIONS_CSV="eu-west-1,us-east-1"
 PLATFORM_ADMINS_GROUP="3AM-Platform-Admins"
 BREAKGLASS_GROUP="3AM-BreakGlass"
 EXTERNAL_IDP=false
 SKIP_SCPS=false
+SKIP_BOOTSTRAP=false
+SKIP_ORG=false
 AUTO_APPROVE=false
 QUIET=false
 LOG_DIR="${HOME}"
 COMMAND="apply"
 
+# Phase 5 defaults (operator usually leaves these alone).
+AXELSPIRE_CI_ACCOUNT_ID="033113129683"
+AXELSPIRE_CI_REGION="eu-west-1"
+AXELSPIRE_CI_ROLE_NAME="GitHubActions-CustomerDeploy"
+DEPLOYMENT_ROLE_NAME="ThreeAM-Deployment"
+EXTERNAL_ID_SECRET_NAME="/3am/license/external-id"
+REQUIRE_LICENSE_SESSION_TAG=true
+KMS_MULTI_REGION=false
+KMS_DELETION_WINDOW_DAYS=30
+STATE_LOCK_TABLE_NAME="3am-state-lock"
+CUSTOMER_CMK_ALIAS="alias/3am-customer-cmk"
+
 # Per-customer inputs (no defaults — must be supplied on first apply).
 CUSTOMER_NAME=""
+CUSTOMER_ID=""
 PLATFORM_ADMIN_USER=""
 BREAKGLASS_USER=""
 
@@ -44,6 +72,8 @@ INSTANCE_ARN=""
 IDSTORE_ID=""
 ROOT_ID=""
 ACCOUNT_ID=""
+PARTITION=""
+EFFECTIVE_REGION=""
 REGION_POLICY_ID=""
 ROOT_POLICY_ID=""
 PS_PLATFORM_ARN=""
@@ -55,6 +85,15 @@ BG_USER_ID=""
 PA_ROLE_ARN=""
 BG_ROLE_ARN=""
 
+# Phase 5 outputs.
+DEPLOYMENT_ROLE_ARN=""
+CUSTOMER_CMK_ARN=""
+CUSTOMER_CMK_KEY_ID=""
+EXTERNAL_ID_SECRET_ARN=""
+STATE_BUCKET_NAME=""
+AXELSPIRE_ARTIFACT_KMS_KEY_ARN=""
+AXELSPIRE_ARTIFACT_S3_BUCKET_ARN=""
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -64,6 +103,11 @@ init_logging () {
   exec > >(tee -a "${LOG_FILE}") 2>&1
   trap 'echo; echo "FAILED at line ${LINENO} (exit $?). Log: ${LOG_FILE}" >&2' ERR
   log "log file: ${LOG_FILE}"
+  local _arg _quoted=""
+  for _arg in "${INVOCATION_ARGV[@]}"; do
+    _quoted+=" $(printf '%q' "${_arg}")"
+  done
+  log "invoked as: $0${_quoted}"
 }
 
 log ()  { echo "[$(date -u +%H:%M:%SZ)] $*"; }
@@ -78,10 +122,10 @@ usage () {
   cat <<'USAGE'
 Usage: single-account-setup.sh [COMMAND] [OPTIONS]
 
-Set up 3AM Identity Center (and optional SCPs) inside the AWS account
-you are currently signed into. No new AWS account is created; the
-current account is used as both the Org-management context AND the
-workload target.
+Set up 3AM Identity Center, SCPs and the Phase 5 bootstrap resources
+(ThreeAM-Deployment role, customer CMK, state backend, external-ID
+secret, SSM parameters) inside the AWS account you are currently
+signed into. Emits a single handoff.json blob for AxelSpire.
 
 Commands:
   apply        Run / resume the full setup (default).
@@ -100,6 +144,9 @@ Required on first apply (subsequent runs reuse existing resources):
 Auto-derived from the calling AWS account when omitted:
   --customer-name NAME          Customer display name. Default: the IAM
                                 account alias if set, else "account-<ID>".
+  --customer-id SLUG            Lowercase slug used in resource tags and
+                                the AxelSpire CI key alias. Default: a
+                                slug derived from --customer-name.
   --platform-admin-user EMAIL   First member of the platform-admin group
                                 (UserName in Identity Center directory).
                                 Default: Organization MasterAccountEmail.
@@ -112,18 +159,32 @@ Optional:
   --external-idp                Skip user/group creation; expect them to
                                 come from an external IdP via SCIM.
   --skip-scps                   Do not create or attach the 3am-region-deny
-                                / 3am-root-user-deny SCPs. SCPs are never
-                                enforced against the management account
-                                itself, so they are no-ops in a true
-                                single-account topology, but they are
-                                created and attached to root by default
-                                so future child accounts inherit them.
+                                / 3am-root-user-deny SCPs.
+  --skip-bootstrap              Run Phase 0 (Identity Center / SCPs) only;
+                                skip the Phase 5 bootstrap resources.
+  --skip-org                    Skip Phase 0 and run Phase 5 only (useful
+                                when re-running after a partial Phase 5
+                                failure, or when Phase 0 was done out-of-band).
+
+Phase 5 tuning (defaults are correct for the standard AxelSpire setup):
+  --axelspire-ci-account-id ID  Default: 033113129683.
+  --axelspire-ci-region REGION  Default: eu-west-1. Used to derive the
+                                AxelSpire CI KMS key and artifacts bucket
+                                ARNs deterministically.
+  --axelspire-ci-role-name NAME Default: GitHubActions-CustomerDeploy.
+  --external-id-secret-name N   Default: /3am/license/external-id.
+                                Auto-created (32-byte hex) if missing.
+  --no-license-session-tag      Drop the aws:RequestTag/LicenseValid
+                                condition from the role trust policy.
+  --kms-multi-region            Create the customer CMK as multi-region.
+  --kms-deletion-window-days N  CMK deletion window, 7-30. Default: 30.
+
   --auto-approve                Skip interactive confirmation.
   --log-dir PATH                Default: $HOME (CloudShell-persistent).
   --quiet                       Reduce console noise (file log is full).
 
 Outputs commands take no per-customer flags; they re-resolve every value
-from AWS using the group / permission-set names.
+from AWS using the group / permission-set / role names.
 
 Examples:
   # Minimal: customer-name and platform-admin auto-derived from AWS
@@ -133,6 +194,7 @@ Examples:
   # Explicit override of every input
   ./single-account-setup.sh apply \
     --customer-name "Acme Corp" \
+    --customer-id acme-corp \
     --platform-admin-user alice@acme.example.com \
     --breakglass-user bob@acme.example.com
 
@@ -151,18 +213,28 @@ parse_args () {
   esac
   while [ $# -gt 0 ]; do
     case "$1" in
-      --customer-name)          CUSTOMER_NAME="$2"; shift 2 ;;
-      --allowed-regions)        ALLOWED_REGIONS_CSV="$2"; shift 2 ;;
-      --platform-admin-user)    PLATFORM_ADMIN_USER="$2"; shift 2 ;;
-      --breakglass-user)        BREAKGLASS_USER="$2"; shift 2 ;;
-      --platform-admins-group)  PLATFORM_ADMINS_GROUP="$2"; shift 2 ;;
-      --breakglass-group)       BREAKGLASS_GROUP="$2"; shift 2 ;;
-      --external-idp)           EXTERNAL_IDP=true; shift ;;
-      --skip-scps)              SKIP_SCPS=true; shift ;;
-      --auto-approve)           AUTO_APPROVE=true; shift ;;
-      --log-dir)                LOG_DIR="$2"; shift 2 ;;
-      --quiet)                  QUIET=true; shift ;;
-      -h|--help)                usage; exit 0 ;;
+      --customer-name)             CUSTOMER_NAME="$2"; shift 2 ;;
+      --customer-id)               CUSTOMER_ID="$2"; shift 2 ;;
+      --allowed-regions)           ALLOWED_REGIONS_CSV="$2"; shift 2 ;;
+      --platform-admin-user)       PLATFORM_ADMIN_USER="$2"; shift 2 ;;
+      --breakglass-user)           BREAKGLASS_USER="$2"; shift 2 ;;
+      --platform-admins-group)     PLATFORM_ADMINS_GROUP="$2"; shift 2 ;;
+      --breakglass-group)          BREAKGLASS_GROUP="$2"; shift 2 ;;
+      --external-idp)              EXTERNAL_IDP=true; shift ;;
+      --skip-scps)                 SKIP_SCPS=true; shift ;;
+      --skip-bootstrap)            SKIP_BOOTSTRAP=true; shift ;;
+      --skip-org)                  SKIP_ORG=true; shift ;;
+      --axelspire-ci-account-id)   AXELSPIRE_CI_ACCOUNT_ID="$2"; shift 2 ;;
+      --axelspire-ci-region)       AXELSPIRE_CI_REGION="$2"; shift 2 ;;
+      --axelspire-ci-role-name)    AXELSPIRE_CI_ROLE_NAME="$2"; shift 2 ;;
+      --external-id-secret-name)   EXTERNAL_ID_SECRET_NAME="$2"; shift 2 ;;
+      --no-license-session-tag)    REQUIRE_LICENSE_SESSION_TAG=false; shift ;;
+      --kms-multi-region)          KMS_MULTI_REGION=true; shift ;;
+      --kms-deletion-window-days)  KMS_DELETION_WINDOW_DAYS="$2"; shift 2 ;;
+      --auto-approve)              AUTO_APPROVE=true; shift ;;
+      --log-dir)                   LOG_DIR="$2"; shift 2 ;;
+      --quiet)                     QUIET=true; shift ;;
+      -h|--help)                   usage; exit 0 ;;
       *) die "unknown argument: $1 (try --help)" ;;
     esac
   done
@@ -177,11 +249,18 @@ preflight () {
   aws sts get-caller-identity --output table
   ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
   [ -n "$ACCOUNT_ID" ] && [ "$ACCOUNT_ID" != "None" ] || die "could not resolve caller account ID"
-  log "preflight: caller account = ${ACCOUNT_ID}"
+  PARTITION=$(aws sts get-caller-identity --query Arn --output text | cut -d: -f2)
+  [ -n "$PARTITION" ] || PARTITION="aws"
+  log "preflight: caller account = ${ACCOUNT_ID} (partition ${PARTITION})"
 
   EFFECTIVE_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-$(aws configure get region 2>/dev/null || true)}}"
   [ -n "$EFFECTIVE_REGION" ] || EFFECTIVE_REGION="<unset>"
   log "preflight: effective region = ${EFFECTIVE_REGION} (regional APIs e.g. sso-admin target this region)"
+
+  if ${SKIP_ORG}; then
+    log "preflight: --skip-org set, skipping Org / Identity Center checks"
+    return
+  fi
 
   log "preflight: organization feature set"
   local fs mgmt
@@ -476,11 +555,11 @@ resolve_reserved_sso_role_arn () {
   echo "$role_arn"
 }
 
-# Fill in --customer-name and --platform-admin-user from AWS when the
-# operator did not supply them. --breakglass-user is never auto-derived:
-# the break-glass identity must be a deliberate choice, ideally distinct
-# from the platform-admin identity. Called after preflight so
-# ACCOUNT_ID is already resolved.
+# Fill in --customer-name, --customer-id and --platform-admin-user from
+# AWS when the operator did not supply them. --breakglass-user is never
+# auto-derived: the break-glass identity must be a deliberate choice,
+# ideally distinct from the platform-admin identity. Called after
+# preflight so ACCOUNT_ID is already resolved.
 resolve_apply_defaults () {
   local master_email alias
   if [ -z "$CUSTOMER_NAME" ]; then
@@ -493,6 +572,15 @@ resolve_apply_defaults () {
       log "no IAM account alias set; defaulting --customer-name to: ${CUSTOMER_NAME}"
     fi
   fi
+  if [ -z "$CUSTOMER_ID" ]; then
+    CUSTOMER_ID=$(printf '%s' "${CUSTOMER_NAME}" \
+                    | tr '[:upper:]' '[:lower:]' \
+                    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+    [ -n "$CUSTOMER_ID" ] || CUSTOMER_ID="account-${ACCOUNT_ID}"
+    log "auto-derived --customer-id from --customer-name: ${CUSTOMER_ID}"
+  fi
+  echo "${CUSTOMER_ID}" | grep -qE '^[a-z0-9-]+$' || die "--customer-id '${CUSTOMER_ID}' must be lowercase alphanumeric with hyphens only"
+  if ${SKIP_ORG}; then return; fi
   if ! ${EXTERNAL_IDP} && [ -z "$PLATFORM_ADMIN_USER" ]; then
     master_email=$(aws organizations describe-organization \
                     --query 'Organization.MasterAccountEmail' \
@@ -506,12 +594,571 @@ resolve_apply_defaults () {
   fi
 }
 
+# Derive the AxelSpire-side ARNs deterministically from --customer-id
+# and the AxelSpire CI account/region. AxelSpire's customer-onboard
+# workflow uses the same formulas (see customer-onboard.yml).
+phase5_compute_axelspire_arns () {
+  AXELSPIRE_ARTIFACT_KMS_KEY_ARN="arn:${PARTITION}:kms:${AXELSPIRE_CI_REGION}:${AXELSPIRE_CI_ACCOUNT_ID}:alias/3am-ci/${CUSTOMER_ID}"
+  AXELSPIRE_ARTIFACT_S3_BUCKET_ARN="arn:${PARTITION}:s3:::3am-ci-artifacts-${AXELSPIRE_CI_ACCOUNT_ID}-${AXELSPIRE_CI_REGION}"
+}
+
+# ---------------------------------------------------------------------------
+# Phase 5 — policy file generation (rewritten on every apply).
+# ---------------------------------------------------------------------------
+# Mirrors deploy/iam.tf, deploy/iam-permissions-ec2.tf,
+# deploy/iam-permissions-extra.tf, deploy/kms.tf and deploy/state-backend.tf.
+# Files are validated with python3 -m json.tool after generation.
+phase5_write_policy_files () {
+  local external_id="${1:-}" admin_arns_json="${2:-[]}" ext_block="" lic_block=""
+
+  if [ -n "${external_id}" ]; then
+    ext_block=$'\n        ,"StringEquals": {"sts:ExternalId": "'"${external_id}"$'"}'
+  fi
+  if ${REQUIRE_LICENSE_SESSION_TAG}; then
+    lic_block=$'\n        ,"StringEquals_LicenseTag": {"aws:RequestTag/LicenseValid": "true"}'
+  fi
+  # We can't compose two StringEquals blocks safely as JSON; build the
+  # Condition with jq if available, otherwise hand-build.
+  log "writing ${TRUST_POLICY_FILE}"
+  if command -v jq >/dev/null 2>&1; then
+    local conds='{"StringLike":{"sts:RoleSessionName":["3am-*","tg-*"]}}'
+    [ -n "${external_id}" ] && conds=$(echo "${conds}" | jq --arg eid "${external_id}" \
+                                          '. + {StringEquals: {"sts:ExternalId": $eid}}')
+    if ${REQUIRE_LICENSE_SESSION_TAG}; then
+      # If StringEquals already set (external_id), merge LicenseValid in.
+      if echo "${conds}" | jq -e '.StringEquals' >/dev/null 2>&1; then
+        conds=$(echo "${conds}" | jq '.StringEquals += {"aws:RequestTag/LicenseValid": "true"}')
+      else
+        conds=$(echo "${conds}" | jq '. + {StringEquals: {"aws:RequestTag/LicenseValid": "true"}}')
+      fi
+    fi
+    jq -n \
+      --arg principal "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_ROLE_NAME}" \
+      --argjson conds "${conds}" \
+      '{
+        Version: "2012-10-17",
+        Statement: [{
+          Sid: "AllowAxelspireCIAssumeRole",
+          Effect: "Allow",
+          Principal: { AWS: $principal },
+          Action: ["sts:AssumeRole","sts:TagSession"],
+          Condition: $conds
+        }]
+      }' > "${TRUST_POLICY_FILE}"
+  else
+    # Minimal fallback: emit just the StringLike condition. Operators
+    # without jq lose external-id / LicenseValid enforcement in the
+    # trust policy file; the SSM mirror still records the configured
+    # values for the operator to apply manually.
+    cat > "${TRUST_POLICY_FILE}" <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Sid": "AllowAxelspireCIAssumeRole",
+    "Effect": "Allow",
+    "Principal": { "AWS": "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_ROLE_NAME}" },
+    "Action": ["sts:AssumeRole","sts:TagSession"],
+    "Condition": { "StringLike": { "sts:RoleSessionName": ["3am-*","tg-*"] } }
+  }]
+}
+EOF
+  fi
+
+  log "writing ${PERMS_POLICY_FILE}"
+  cat > "${PERMS_POLICY_FILE}" <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "LambdaOn3amFunctions", "Effect": "Allow",
+      "Action": ["lambda:*"],
+      "Resource": ["arn:${PARTITION}:lambda:*:${ACCOUNT_ID}:function:3am-*"] },
+    { "Sid": "KmsDataPlaneOnCustomerCmk", "Effect": "Allow",
+      "Action": ["kms:Encrypt","kms:Decrypt","kms:ReEncryptFrom","kms:ReEncryptTo",
+                 "kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext","kms:DescribeKey"],
+      "Resource": ["${CUSTOMER_CMK_ARN}"] },
+    { "Sid": "KmsDataPlaneOnAxelspireArtifactCmk", "Effect": "Allow",
+      "Action": ["kms:Encrypt","kms:Decrypt","kms:ReEncryptFrom","kms:ReEncryptTo",
+                 "kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext","kms:DescribeKey"],
+      "Resource": ["${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"] },
+    { "Sid": "S3OnStateBucket", "Effect": "Allow",
+      "Action": ["s3:GetObject","s3:GetObjectVersion","s3:PutObject","s3:DeleteObject",
+                 "s3:ListBucket","s3:ListBucketVersions","s3:GetBucketVersioning",
+                 "s3:GetEncryptionConfiguration","s3:GetBucketLocation"],
+      "Resource": ["arn:${PARTITION}:s3:::${STATE_BUCKET_NAME}",
+                   "arn:${PARTITION}:s3:::${STATE_BUCKET_NAME}/*"] },
+    { "Sid": "S3ReadOnAxelspireArtifactBucket", "Effect": "Allow",
+      "Action": ["s3:GetObject","s3:GetObjectVersion","s3:ListBucket","s3:GetBucketLocation"],
+      "Resource": ["${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}",
+                   "${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}/*"] },
+    { "Sid": "DynamoDBOnStateLockTable", "Effect": "Allow",
+      "Action": ["dynamodb:GetItem","dynamodb:PutItem","dynamodb:DeleteItem","dynamodb:DescribeTable"],
+      "Resource": ["arn:${PARTITION}:dynamodb:*:${ACCOUNT_ID}:table/${STATE_LOCK_TABLE_NAME}"] }
+  ]
+}
+EOF
+
+  log "writing ${PERMS_EC2_FILE}"
+  cat > "${PERMS_EC2_FILE}" <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "Ec2VpcRead", "Effect": "Allow",
+      "Action": ["ec2:DescribeVpcs","ec2:DescribeSubnets","ec2:DescribeRouteTables",
+                 "ec2:DescribeNetworkInterfaces","ec2:DescribeSecurityGroups",
+                 "ec2:DescribeAvailabilityZones","ec2:DescribeRegions","ec2:DescribeAccountAttributes"],
+      "Resource": ["*"] },
+    { "Sid": "Ec2SecurityGroupWriteOnTagged", "Effect": "Allow",
+      "Action": ["ec2:AuthorizeSecurityGroupIngress","ec2:AuthorizeSecurityGroupEgress",
+                 "ec2:RevokeSecurityGroupIngress","ec2:RevokeSecurityGroupEgress",
+                 "ec2:CreateTags","ec2:DeleteTags"],
+      "Resource": ["arn:${PARTITION}:ec2:*:${ACCOUNT_ID}:security-group/*"],
+      "Condition": { "StringEquals": { "aws:ResourceTag/Service": "3am" } } },
+    { "Sid": "Ec2SecurityGroupCreate", "Effect": "Allow",
+      "Action": ["ec2:CreateSecurityGroup"], "Resource": ["*"],
+      "Condition": { "StringEquals": { "aws:RequestTag/Service": "3am" } } }
+  ]
+}
+EOF
+
+  log "writing ${PERMS_EXTRA_FILE}"
+  cat > "${PERMS_EXTRA_FILE}" <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "SsmReadOn3amParameters", "Effect": "Allow",
+      "Action": ["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","ssm:DescribeParameters"],
+      "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am/*"] },
+    { "Sid": "SsmWriteOn3amParameters", "Effect": "Allow",
+      "Action": ["ssm:PutParameter","ssm:DeleteParameter","ssm:DeleteParameters",
+                 "ssm:AddTagsToResource","ssm:RemoveTagsFromResource","ssm:LabelParameterVersion"],
+      "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am/*"] },
+    { "Sid": "LogsOn3amGroups", "Effect": "Allow",
+      "Action": ["logs:CreateLogGroup","logs:CreateLogStream","logs:DeleteLogGroup",
+                 "logs:DescribeLogGroups","logs:DescribeLogStreams","logs:PutLogEvents",
+                 "logs:PutRetentionPolicy","logs:TagResource","logs:UntagResource","logs:AssociateKmsKey"],
+      "Resource": ["arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/3am-*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/3am-*:*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/3am/*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/3am/*:*"] },
+    { "Sid": "ApiGatewayOnTaggedResources", "Effect": "Allow",
+      "Action": ["apigateway:GET","apigateway:POST","apigateway:PUT","apigateway:PATCH",
+                 "apigateway:DELETE","apigateway:TagResource","apigateway:UntagResource"],
+      "Resource": ["arn:${PARTITION}:apigateway:*::/*"],
+      "Condition": { "StringEquals": { "aws:ResourceTag/Service": "3am" } } },
+    { "Sid": "Route53Read", "Effect": "Allow",
+      "Action": ["route53:ListHostedZones","route53:GetHostedZone",
+                 "route53:ListResourceRecordSets","route53:GetChange"],
+      "Resource": ["*"] },
+    { "Sid": "Route53WriteOnTaggedZones", "Effect": "Allow",
+      "Action": ["route53:ChangeResourceRecordSets","route53:ChangeTagsForResource"],
+      "Resource": ["arn:${PARTITION}:route53:::hostedzone/*"],
+      "Condition": { "StringEquals": { "aws:ResourceTag/3am-managed": "true" } } },
+    { "Sid": "AcmOnTaggedCertificates", "Effect": "Allow",
+      "Action": ["acm:DescribeCertificate","acm:GetCertificate","acm:ListTagsForCertificate",
+                 "acm:DeleteCertificate","acm:AddTagsToCertificate","acm:RemoveTagsFromCertificate"],
+      "Resource": ["*"],
+      "Condition": { "StringEquals": { "aws:ResourceTag/Service": "3am" } } },
+    { "Sid": "AcmListAndRequest", "Effect": "Allow",
+      "Action": ["acm:ListCertificates","acm:RequestCertificate"], "Resource": ["*"] }
+  ]
+}
+EOF
+
+  log "writing ${CMK_POLICY_FILE}"
+  # Customer admin role ARNs are passed in as a JSON array; the
+  # AllowCustomerAdminsKeyManagement statement is omitted when empty
+  # (matches deploy/kms.tf's dynamic block).
+  if [ "${admin_arns_json}" = "[]" ] || [ -z "${admin_arns_json}" ]; then
+    cat > "${CMK_POLICY_FILE}" <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "EnableIAMUserPermissions", "Effect": "Allow",
+      "Principal": { "AWS": "arn:${PARTITION}:iam::${ACCOUNT_ID}:root" },
+      "Action": "kms:*", "Resource": "*" },
+    { "Sid": "AllowAxelspireDeploymentRoleDataPlane", "Effect": "Allow",
+      "Principal": { "AWS": "${DEPLOYMENT_ROLE_ARN}" },
+      "Action": ["kms:Encrypt","kms:Decrypt","kms:ReEncryptFrom","kms:ReEncryptTo",
+                 "kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext","kms:DescribeKey"],
+      "Resource": "*" },
+    { "Sid": "AllowLambdaServiceUseInThisAccount", "Effect": "Allow",
+      "Principal": { "Service": "lambda.amazonaws.com" },
+      "Action": ["kms:Encrypt","kms:Decrypt","kms:ReEncryptFrom","kms:ReEncryptTo",
+                 "kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext",
+                 "kms:DescribeKey","kms:CreateGrant"],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "lambda.${EFFECTIVE_REGION}.amazonaws.com",
+          "kms:CallerAccount": "${ACCOUNT_ID}"
+        }
+      } }
+  ]
+}
+EOF
+  else
+    cat > "${CMK_POLICY_FILE}" <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "EnableIAMUserPermissions", "Effect": "Allow",
+      "Principal": { "AWS": "arn:${PARTITION}:iam::${ACCOUNT_ID}:root" },
+      "Action": "kms:*", "Resource": "*" },
+    { "Sid": "AllowCustomerAdminsKeyManagement", "Effect": "Allow",
+      "Principal": { "AWS": ${admin_arns_json} },
+      "Action": ["kms:Create*","kms:Describe*","kms:Enable*","kms:List*","kms:Put*",
+                 "kms:Update*","kms:Revoke*","kms:Disable*","kms:Get*","kms:Delete*",
+                 "kms:TagResource","kms:UntagResource","kms:ScheduleKeyDeletion","kms:CancelKeyDeletion"],
+      "Resource": "*" },
+    { "Sid": "AllowAxelspireDeploymentRoleDataPlane", "Effect": "Allow",
+      "Principal": { "AWS": "${DEPLOYMENT_ROLE_ARN}" },
+      "Action": ["kms:Encrypt","kms:Decrypt","kms:ReEncryptFrom","kms:ReEncryptTo",
+                 "kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext","kms:DescribeKey"],
+      "Resource": "*" },
+    { "Sid": "AllowLambdaServiceUseInThisAccount", "Effect": "Allow",
+      "Principal": { "Service": "lambda.amazonaws.com" },
+      "Action": ["kms:Encrypt","kms:Decrypt","kms:ReEncryptFrom","kms:ReEncryptTo",
+                 "kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext",
+                 "kms:DescribeKey","kms:CreateGrant"],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "lambda.${EFFECTIVE_REGION}.amazonaws.com",
+          "kms:CallerAccount": "${ACCOUNT_ID}"
+        }
+      } }
+  ]
+}
+EOF
+  fi
+
+  log "writing ${STATE_BUCKET_POLICY_FILE}"
+  cat > "${STATE_BUCKET_POLICY_FILE}" <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "DenyInsecureTransport", "Effect": "Deny",
+      "Principal": "*", "Action": "s3:*",
+      "Resource": ["arn:${PARTITION}:s3:::${STATE_BUCKET_NAME}",
+                   "arn:${PARTITION}:s3:::${STATE_BUCKET_NAME}/*"],
+      "Condition": { "Bool": { "aws:SecureTransport": "false" } } }
+  ]
+}
+EOF
+
+  if command -v python3 >/dev/null 2>&1; then
+    local f
+    for f in "${TRUST_POLICY_FILE}" "${PERMS_POLICY_FILE}" "${PERMS_EC2_FILE}" \
+             "${PERMS_EXTRA_FILE}" "${CMK_POLICY_FILE}" "${STATE_BUCKET_POLICY_FILE}"; do
+      python3 -m json.tool < "${f}" > /dev/null || die "generated ${f} is not valid JSON"
+    done
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Phase 5 — idempotent resource helpers
+# ---------------------------------------------------------------------------
+phase5_common_tags_cli () {
+  # Returns AWS-CLI --tags-style argument list. Used by services whose
+  # Create* call accepts tags inline.
+  echo "Key=Service,Value=3am Key=CustomerId,Value=${CUSTOMER_ID} Key=ManagedBy,Value=single-account-setup.sh Key=BootstrapVersion,Value=${BOOTSTRAP_VERSION}"
+}
+
+phase5_get_or_create_deployment_role () {
+  local arn
+  if aws iam get-role --role-name "${DEPLOYMENT_ROLE_NAME}" >/dev/null 2>&1; then
+    log "reusing IAM role ${DEPLOYMENT_ROLE_NAME}; updating trust policy"
+    aws iam update-assume-role-policy \
+      --role-name "${DEPLOYMENT_ROLE_NAME}" \
+      --policy-document "file://${TRUST_POLICY_FILE}" >/dev/null
+  else
+    log "creating IAM role ${DEPLOYMENT_ROLE_NAME}"
+    # shellcheck disable=SC2046
+    aws iam create-role \
+      --role-name "${DEPLOYMENT_ROLE_NAME}" \
+      --assume-role-policy-document "file://${TRUST_POLICY_FILE}" \
+      --description "Cross-account role assumed by AxelSpire CI to deploy 3AM resources for ${CUSTOMER_ID}." \
+      --max-session-duration 3600 \
+      --tags $(phase5_common_tags_cli) >/dev/null
+  fi
+  arn=$(aws iam get-role --role-name "${DEPLOYMENT_ROLE_NAME}" \
+          --query 'Role.Arn' --output text)
+  DEPLOYMENT_ROLE_ARN="${arn}"
+}
+
+phase5_put_role_inline_policies () {
+  log "putting inline policies on ${DEPLOYMENT_ROLE_NAME}"
+  aws iam put-role-policy --role-name "${DEPLOYMENT_ROLE_NAME}" \
+    --policy-name ThreeAM-Deployment-Permissions \
+    --policy-document "file://${PERMS_POLICY_FILE}" >/dev/null
+  aws iam put-role-policy --role-name "${DEPLOYMENT_ROLE_NAME}" \
+    --policy-name ThreeAM-Deployment-Permissions-Ec2 \
+    --policy-document "file://${PERMS_EC2_FILE}" >/dev/null
+  aws iam put-role-policy --role-name "${DEPLOYMENT_ROLE_NAME}" \
+    --policy-name ThreeAM-Deployment-Permissions-Extra \
+    --policy-document "file://${PERMS_EXTRA_FILE}" >/dev/null
+}
+
+# CMK lookup-by-alias then create-if-missing. Re-applies the key policy
+# on every run so trust changes (rotated admin role ARNs, etc.) take
+# effect. Key rotation is enabled if not already.
+phase5_get_or_create_cmk () {
+  local key_id mr_flag=""
+  ${KMS_MULTI_REGION} && mr_flag="--multi-region"
+  key_id=$(aws kms describe-key --key-id "${CUSTOMER_CMK_ALIAS}" \
+            --query 'KeyMetadata.KeyId' --output text 2>/dev/null || echo "")
+  if [ -z "${key_id}" ]; then
+    log "creating customer CMK ${CUSTOMER_CMK_ALIAS}"
+    # shellcheck disable=SC2046,SC2086
+    key_id=$(aws kms create-key \
+              --description "3AM customer-managed CMK for ${CUSTOMER_ID}" \
+              ${mr_flag} \
+              --tags $(phase5_common_tags_cli | sed 's/Key=/TagKey=/g; s/Value=/TagValue=/g') \
+              --query 'KeyMetadata.KeyId' --output text)
+    aws kms create-alias \
+      --alias-name "${CUSTOMER_CMK_ALIAS}" \
+      --target-key-id "${key_id}" >/dev/null
+  else
+    log "reusing customer CMK ${CUSTOMER_CMK_ALIAS} (key-id ${key_id})"
+  fi
+  CUSTOMER_CMK_KEY_ID="${key_id}"
+  CUSTOMER_CMK_ARN=$(aws kms describe-key --key-id "${key_id}" \
+                       --query 'KeyMetadata.Arn' --output text)
+  aws kms enable-key-rotation --key-id "${key_id}" >/dev/null 2>&1 || true
+}
+
+phase5_put_cmk_policy () {
+  log "putting key policy on ${CUSTOMER_CMK_ALIAS}"
+  aws kms put-key-policy \
+    --key-id "${CUSTOMER_CMK_KEY_ID}" \
+    --policy-name default \
+    --policy "file://${CMK_POLICY_FILE}" >/dev/null
+}
+
+# Secrets Manager: create the external-ID secret with a random 32-byte
+# hex value on first run; leave the value alone on subsequent runs.
+phase5_get_or_create_external_id_secret () {
+  local arn
+  arn=$(aws secretsmanager describe-secret \
+          --secret-id "${EXTERNAL_ID_SECRET_NAME}" \
+          --query 'ARN' --output text 2>/dev/null || echo "")
+  if [ -n "${arn}" ] && [ "${arn}" != "None" ]; then
+    log "reusing external-ID secret ${EXTERNAL_ID_SECRET_NAME}"
+    EXTERNAL_ID_SECRET_ARN="${arn}"
+    return
+  fi
+  command -v openssl >/dev/null 2>&1 || die "openssl required to generate external-ID secret value"
+  log "creating external-ID secret ${EXTERNAL_ID_SECRET_NAME} (32-byte hex)"
+  local secret_value
+  secret_value=$(openssl rand -hex 32)
+  # shellcheck disable=SC2046
+  arn=$(aws secretsmanager create-secret \
+          --name "${EXTERNAL_ID_SECRET_NAME}" \
+          --description "External ID for AssumeRole into ${DEPLOYMENT_ROLE_NAME}" \
+          --kms-key-id "${CUSTOMER_CMK_ARN}" \
+          --secret-string "${secret_value}" \
+          --tags $(phase5_common_tags_cli | sed 's/Key=/Key=/g') \
+          --query 'ARN' --output text)
+  EXTERNAL_ID_SECRET_ARN="${arn}"
+}
+
+phase5_read_external_id_value () {
+  aws secretsmanager get-secret-value \
+    --secret-id "${EXTERNAL_ID_SECRET_ARN}" \
+    --query 'SecretString' --output text
+}
+
+phase5_get_or_create_state_bucket () {
+  STATE_BUCKET_NAME="3am-state-${ACCOUNT_ID}-${EFFECTIVE_REGION}"
+  if aws s3api head-bucket --bucket "${STATE_BUCKET_NAME}" 2>/dev/null; then
+    log "reusing state bucket ${STATE_BUCKET_NAME}"
+  else
+    log "creating state bucket ${STATE_BUCKET_NAME}"
+    if [ "${EFFECTIVE_REGION}" = "us-east-1" ]; then
+      aws s3api create-bucket --bucket "${STATE_BUCKET_NAME}" >/dev/null
+    else
+      aws s3api create-bucket --bucket "${STATE_BUCKET_NAME}" \
+        --create-bucket-configuration "LocationConstraint=${EFFECTIVE_REGION}" >/dev/null
+    fi
+  fi
+
+  log "applying ownership / public-access / versioning / encryption / lifecycle / policy"
+  aws s3api put-bucket-ownership-controls --bucket "${STATE_BUCKET_NAME}" \
+    --ownership-controls 'Rules=[{ObjectOwnership=BucketOwnerEnforced}]' >/dev/null
+  aws s3api put-public-access-block --bucket "${STATE_BUCKET_NAME}" \
+    --public-access-block-configuration \
+      'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true' >/dev/null
+  aws s3api put-bucket-versioning --bucket "${STATE_BUCKET_NAME}" \
+    --versioning-configuration Status=Enabled >/dev/null
+  aws s3api put-bucket-encryption --bucket "${STATE_BUCKET_NAME}" \
+    --server-side-encryption-configuration "{\"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"aws:kms\",\"KMSMasterKeyID\":\"${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}\"},\"BucketKeyEnabled\":true}]}" >/dev/null
+  aws s3api put-bucket-lifecycle-configuration --bucket "${STATE_BUCKET_NAME}" \
+    --lifecycle-configuration '{"Rules":[{"ID":"transition-noncurrent-to-glacier","Status":"Enabled","Filter":{},"NoncurrentVersionTransitions":[{"NoncurrentDays":90,"StorageClass":"GLACIER"}],"NoncurrentVersionExpiration":{"NoncurrentDays":365}}]}' >/dev/null
+  aws s3api put-bucket-policy --bucket "${STATE_BUCKET_NAME}" \
+    --policy "file://${STATE_BUCKET_POLICY_FILE}" >/dev/null
+  aws s3api put-bucket-tagging --bucket "${STATE_BUCKET_NAME}" \
+    --tagging "TagSet=[{Key=Service,Value=3am},{Key=CustomerId,Value=${CUSTOMER_ID}},{Key=ManagedBy,Value=single-account-setup.sh},{Key=BootstrapVersion,Value=${BOOTSTRAP_VERSION}}]" >/dev/null
+}
+
+phase5_get_or_create_lock_table () {
+  if aws dynamodb describe-table --table-name "${STATE_LOCK_TABLE_NAME}" >/dev/null 2>&1; then
+    log "reusing lock table ${STATE_LOCK_TABLE_NAME}"
+  else
+    log "creating lock table ${STATE_LOCK_TABLE_NAME} (PAY_PER_REQUEST, SSE-KMS, PITR)"
+    aws dynamodb create-table \
+      --table-name "${STATE_LOCK_TABLE_NAME}" \
+      --billing-mode PAY_PER_REQUEST \
+      --attribute-definitions AttributeName=LockID,AttributeType=S \
+      --key-schema AttributeName=LockID,KeyType=HASH \
+      --sse-specification "Enabled=true,SSEType=KMS,KMSMasterKeyId=${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" \
+      --tags "Key=Service,Value=3am" "Key=CustomerId,Value=${CUSTOMER_ID}" \
+             "Key=ManagedBy,Value=single-account-setup.sh" \
+             "Key=BootstrapVersion,Value=${BOOTSTRAP_VERSION}" >/dev/null
+    log "waiting for lock table ACTIVE"
+    aws dynamodb wait table-exists --table-name "${STATE_LOCK_TABLE_NAME}"
+    aws dynamodb update-continuous-backups --table-name "${STATE_LOCK_TABLE_NAME}" \
+      --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true >/dev/null 2>&1 || true
+  fi
+}
+
+phase5_put_ssm_params () {
+  log "publishing /3am/* SSM parameters"
+  _put_ssm () {
+    local name=$1 desc=$2 value=$3 type=${4:-String} key_id=${5:-}
+    if [ "${type}" = "SecureString" ] && [ -n "${key_id}" ]; then
+      aws ssm put-parameter --name "${name}" --description "${desc}" \
+        --type "${type}" --key-id "${key_id}" --overwrite --value "${value}" >/dev/null
+    else
+      aws ssm put-parameter --name "${name}" --description "${desc}" \
+        --type "${type}" --overwrite --value "${value}" >/dev/null
+    fi
+  }
+  _put_ssm /3am/kms/customer-cmk-arn  "ARN of the customer-managed CMK."  "${CUSTOMER_CMK_ARN}"
+  _put_ssm /3am/kms/customer-cmk-id   "Key ID of the customer-managed CMK." "${CUSTOMER_CMK_KEY_ID}"
+  _put_ssm /3am/state/bucket-name     "Name of the S3 bucket holding Terraform state." "${STATE_BUCKET_NAME}"
+  _put_ssm /3am/state/lock-table-name "Name of the DynamoDB state-lock table." "${STATE_LOCK_TABLE_NAME}"
+  _put_ssm /3am/iam/deployment-role-arn "ARN of the ${DEPLOYMENT_ROLE_NAME} role." "${DEPLOYMENT_ROLE_ARN}"
+  _put_ssm /3am/axelspire/artifact-kms-key-arn   "ARN (or alias ARN) of the AxelSpire-owned CI CMK." "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"
+  _put_ssm /3am/axelspire/artifact-s3-bucket-arn "ARN of the AxelSpire CI artifacts S3 bucket." "${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}"
+  _put_ssm /3am/bootstrap/version     "Version of the bootstrap that was last applied." "${BOOTSTRAP_VERSION}"
+  _put_ssm /3am/bootstrap/applied-at  "Timestamp of the last apply of the bootstrap." "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+
+# Main Phase 5 entry-point. Assumes preflight has resolved ACCOUNT_ID,
+# PARTITION, EFFECTIVE_REGION and (for the CMK admin statement) the
+# AWSReservedSSO role ARNs.
+phase5_apply () {
+  phase5_compute_axelspire_arns
+
+  log "Phase 5: AxelSpire artifact KMS key = ${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"
+  log "Phase 5: AxelSpire artifact S3 bucket = ${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}"
+
+  STATE_BUCKET_NAME="3am-state-${ACCOUNT_ID}-${EFFECTIVE_REGION}"
+
+  # Step 1: KMS CMK (needed by Secrets Manager for the external-ID
+  # secret and referenced by the inline role policy).
+  # We need a placeholder role ARN before writing the CMK policy, so
+  # compute the ARN string ahead of the role actually existing. AWS
+  # accepts the string at policy-write time.
+  DEPLOYMENT_ROLE_ARN="arn:${PARTITION}:iam::${ACCOUNT_ID}:role/${DEPLOYMENT_ROLE_NAME}"
+
+  # Collect customer admin role ARNs from Phase 0 outputs (PA / BG roles).
+  # The AllowCustomerAdminsKeyManagement statement is omitted when none.
+  local admin_arns_json="[]"
+  if command -v jq >/dev/null 2>&1; then
+    admin_arns_json=$(jq -nc \
+      --arg pa "${PA_ROLE_ARN}" --arg bg "${BG_ROLE_ARN}" \
+      '[$pa,$bg] | map(select(. != ""))')
+  else
+    local pa_csv="" bg_csv=""
+    [ -n "${PA_ROLE_ARN}" ] && pa_csv="\"${PA_ROLE_ARN}\""
+    [ -n "${BG_ROLE_ARN}" ] && bg_csv="\"${BG_ROLE_ARN}\""
+    case "${pa_csv}${bg_csv}" in
+      "") admin_arns_json="[]" ;;
+      *)
+        if [ -n "${pa_csv}" ] && [ -n "${bg_csv}" ]; then
+          admin_arns_json="[${pa_csv},${bg_csv}]"
+        else
+          admin_arns_json="[${pa_csv}${bg_csv}]"
+        fi
+        ;;
+    esac
+  fi
+
+  # Phase 5 step 1: customer CMK (needs CUSTOMER_CMK_ARN before policies
+  # that reference it; the policy file uses placeholders).
+  log "== Phase 5 step 1/6: customer CMK =="
+  # Initial CMK creation uses a minimal account-root policy; we refresh
+  # it at the end once DEPLOYMENT_ROLE_ARN and CUSTOMER_CMK_ARN are real.
+  if ! aws kms describe-key --key-id "${CUSTOMER_CMK_ALIAS}" >/dev/null 2>&1; then
+    local minimal_policy="/tmp/3am-customer-cmk-minimal.json"
+    cat > "${minimal_policy}" <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Sid": "EnableIAMUserPermissions", "Effect": "Allow",
+    "Principal": { "AWS": "arn:${PARTITION}:iam::${ACCOUNT_ID}:root" },
+    "Action": "kms:*", "Resource": "*"
+  }]
+}
+EOF
+    local mr_flag="" key_id
+    ${KMS_MULTI_REGION} && mr_flag="--multi-region"
+    log "creating customer CMK ${CUSTOMER_CMK_ALIAS}"
+    # shellcheck disable=SC2086
+    key_id=$(aws kms create-key \
+              --description "3AM customer-managed CMK for ${CUSTOMER_ID}" \
+              ${mr_flag} \
+              --policy "file://${minimal_policy}" \
+              --tags "TagKey=Service,TagValue=3am" \
+                     "TagKey=CustomerId,TagValue=${CUSTOMER_ID}" \
+                     "TagKey=ManagedBy,TagValue=single-account-setup.sh" \
+                     "TagKey=BootstrapVersion,TagValue=${BOOTSTRAP_VERSION}" \
+              --query 'KeyMetadata.KeyId' --output text)
+    aws kms create-alias --alias-name "${CUSTOMER_CMK_ALIAS}" --target-key-id "${key_id}" >/dev/null
+    CUSTOMER_CMK_KEY_ID="${key_id}"
+  else
+    CUSTOMER_CMK_KEY_ID=$(aws kms describe-key --key-id "${CUSTOMER_CMK_ALIAS}" \
+                            --query 'KeyMetadata.KeyId' --output text)
+    log "reusing customer CMK ${CUSTOMER_CMK_ALIAS} (key-id ${CUSTOMER_CMK_KEY_ID})"
+  fi
+  CUSTOMER_CMK_ARN=$(aws kms describe-key --key-id "${CUSTOMER_CMK_KEY_ID}" \
+                       --query 'KeyMetadata.Arn' --output text)
+  aws kms enable-key-rotation --key-id "${CUSTOMER_CMK_KEY_ID}" >/dev/null 2>&1 || true
+
+  log "== Phase 5 step 2/6: external-ID secret =="
+  phase5_get_or_create_external_id_secret
+  local external_id_value
+  external_id_value=$(phase5_read_external_id_value)
+
+  log "== Phase 5 step 3/6: ThreeAM-Deployment role =="
+  # Write the policy files now that we know STATE_BUCKET_NAME,
+  # CUSTOMER_CMK_ARN and external-ID value.
+  phase5_write_policy_files "${external_id_value}" "${admin_arns_json}"
+  phase5_get_or_create_deployment_role
+  phase5_put_role_inline_policies
+
+  log "== Phase 5 step 4/6: CMK key policy (now that role exists) =="
+  # Regenerate CMK policy with the real role ARN principal and re-apply.
+  phase5_write_policy_files "${external_id_value}" "${admin_arns_json}"
+  phase5_put_cmk_policy
+
+  log "== Phase 5 step 5/6: state bucket + lock table =="
+  phase5_get_or_create_state_bucket
+  phase5_get_or_create_lock_table
+
+  log "== Phase 5 step 6/6: SSM parameters =="
+  phase5_put_ssm_params
+}
+
+
+
 # ---------------------------------------------------------------------------
 # apply — full setup, idempotent
 # ---------------------------------------------------------------------------
 do_apply () {
-  if ! ${EXTERNAL_IDP}; then
-    [ -n "$BREAKGLASS_USER" ] || die "--breakglass-user required (or pass --external-idp)"
+  if ! ${SKIP_ORG} && ! ${EXTERNAL_IDP}; then
+    [ -n "$BREAKGLASS_USER" ] || die "--breakglass-user required (or pass --external-idp / --skip-org)"
   fi
 
   preflight
@@ -519,60 +1166,79 @@ do_apply () {
 
   say
   say "Customer:           ${CUSTOMER_NAME}"
+  say "Customer ID slug:   ${CUSTOMER_ID}"
   say "Target account:     ${ACCOUNT_ID} (current caller — used as workload account)"
   say "Effective region:   ${EFFECTIVE_REGION}"
   say "Allowed regions:    ${ALLOWED_REGIONS_CSV}"
-  say "Identity Center:    ${INSTANCE_ARN}"
-  say "Platform admin:     ${PLATFORM_ADMIN_USER:-<external IdP>}"
-  say "Break-glass:        ${BREAKGLASS_USER:-<external IdP>}"
+  say "Identity Center:    ${INSTANCE_ARN:-<n/a — skip-org>}"
+  say "Platform admin:     ${PLATFORM_ADMIN_USER:-<external IdP / skip-org>}"
+  say "Break-glass:        ${BREAKGLASS_USER:-<external IdP / skip-org>}"
   say "External IdP:       ${EXTERNAL_IDP}"
+  say "Skip Phase 0 (org): ${SKIP_ORG}"
   say "Skip SCPs:          ${SKIP_SCPS}"
+  say "Skip Phase 5:       ${SKIP_BOOTSTRAP}"
+  say "AxelSpire CI acct:  ${AXELSPIRE_CI_ACCOUNT_ID} (${AXELSPIRE_CI_REGION})"
   say
   if ! ${AUTO_APPROVE}; then
     read -r -p "Proceed? [y/N] " ans
     [ "${ans:-}" = "y" ] || die "aborted by operator"
   fi
 
-  if ${SKIP_SCPS}; then
-    log "== step 1/4: SCPs (skipped, --skip-scps) =="
+  if ${SKIP_ORG}; then
+    log "== Phase 0 skipped (--skip-org) =="
   else
-    log "== step 1/4: SCPs =="
-    write_policy_files
-    REGION_POLICY_ID=$(get_or_create_scp 3am-region-deny    "${REGION_POLICY_FILE}")
-    ROOT_POLICY_ID=$(get_or_create_scp   3am-root-user-deny "${ROOT_POLICY_FILE}")
-    # Attach to root: no-op for the management account itself (SCPs do
-    # not apply there) but inherited by any future child accounts.
-    attach_policy_if_missing "${REGION_POLICY_ID}" "${ROOT_ID}"
-    attach_policy_if_missing "${ROOT_POLICY_ID}"   "${ROOT_ID}"
+    if ${SKIP_SCPS}; then
+      log "== Phase 0 step 1/4: SCPs (skipped, --skip-scps) =="
+    else
+      log "== Phase 0 step 1/4: SCPs =="
+      write_policy_files
+      REGION_POLICY_ID=$(get_or_create_scp 3am-region-deny    "${REGION_POLICY_FILE}")
+      ROOT_POLICY_ID=$(get_or_create_scp   3am-root-user-deny "${ROOT_POLICY_FILE}")
+      # Attach to root: no-op for the management account itself (SCPs do
+      # not apply there) but inherited by any future child accounts.
+      attach_policy_if_missing "${REGION_POLICY_ID}" "${ROOT_ID}"
+      attach_policy_if_missing "${ROOT_POLICY_ID}"   "${ROOT_ID}"
+    fi
+
+    log "== Phase 0 step 2/4: permission sets =="
+    PS_PLATFORM_ARN=$(get_or_create_permission_set PlatformAdmin PT8H)
+    PS_BREAKGLASS_ARN=$(get_or_create_permission_set BreakGlass  PT1H)
+    attach_managed_policy_if_missing "${PS_PLATFORM_ARN}"   arn:aws:iam::aws:policy/AdministratorAccess
+    attach_managed_policy_if_missing "${PS_BREAKGLASS_ARN}" arn:aws:iam::aws:policy/AdministratorAccess
+
+    log "== Phase 0 step 3/4: groups / users =="
+    if ${EXTERNAL_IDP}; then
+      log "external IdP: looking up groups (expect SCIM to have synced them)"
+      PA_GROUP_ID=$(lookup_group_required "${PLATFORM_ADMINS_GROUP}")
+      BG_GROUP_ID=$(lookup_group_required "${BREAKGLASS_GROUP}")
+    else
+      PA_GROUP_ID=$(get_or_create_group "${PLATFORM_ADMINS_GROUP}")
+      BG_GROUP_ID=$(get_or_create_group "${BREAKGLASS_GROUP}")
+      PA_USER_ID=$(get_or_create_user "${PLATFORM_ADMIN_USER}")
+      BG_USER_ID=$(get_or_create_user "${BREAKGLASS_USER}")
+      ensure_group_membership "${PA_GROUP_ID}" "${PA_USER_ID}"
+      ensure_group_membership "${BG_GROUP_ID}" "${BG_USER_ID}"
+    fi
+
+    log "== Phase 0 step 4/4: account assignments =="
+    ensure_account_assignment "${ACCOUNT_ID}" "${PS_PLATFORM_ARN}"   GROUP "${PA_GROUP_ID}"
+    ensure_account_assignment "${ACCOUNT_ID}" "${PS_BREAKGLASS_ARN}" GROUP "${BG_GROUP_ID}"
+
+    log "== resolving AWSReservedSSO role ARNs (best-effort) =="
+    PA_ROLE_ARN=$(resolve_reserved_sso_role_arn PlatformAdmin || true)
+    BG_ROLE_ARN=$(resolve_reserved_sso_role_arn BreakGlass    || true)
   fi
 
-  log "== step 2/4: permission sets =="
-  PS_PLATFORM_ARN=$(get_or_create_permission_set PlatformAdmin PT8H)
-  PS_BREAKGLASS_ARN=$(get_or_create_permission_set BreakGlass  PT1H)
-  attach_managed_policy_if_missing "${PS_PLATFORM_ARN}"   arn:aws:iam::aws:policy/AdministratorAccess
-  attach_managed_policy_if_missing "${PS_BREAKGLASS_ARN}" arn:aws:iam::aws:policy/AdministratorAccess
-
-  log "== step 3/4: groups / users =="
-  if ${EXTERNAL_IDP}; then
-    log "external IdP: looking up groups (expect SCIM to have synced them)"
-    PA_GROUP_ID=$(lookup_group_required "${PLATFORM_ADMINS_GROUP}")
-    BG_GROUP_ID=$(lookup_group_required "${BREAKGLASS_GROUP}")
+  if ${SKIP_BOOTSTRAP}; then
+    log "== Phase 5 skipped (--skip-bootstrap) =="
   else
-    PA_GROUP_ID=$(get_or_create_group "${PLATFORM_ADMINS_GROUP}")
-    BG_GROUP_ID=$(get_or_create_group "${BREAKGLASS_GROUP}")
-    PA_USER_ID=$(get_or_create_user "${PLATFORM_ADMIN_USER}")
-    BG_USER_ID=$(get_or_create_user "${BREAKGLASS_USER}")
-    ensure_group_membership "${PA_GROUP_ID}" "${PA_USER_ID}"
-    ensure_group_membership "${BG_GROUP_ID}" "${BG_USER_ID}"
+    # Phase 5 — cross-account role, customer CMK, state backend, secret,
+    # SSM parameters. PA_ROLE_ARN / BG_ROLE_ARN may still be empty when
+    # Phase 0 was skipped or assignments haven't provisioned yet; the
+    # CMK admin statement is omitted in that case (same shape as the
+    # OpenTofu module's dynamic block).
+    phase5_apply
   fi
-
-  log "== step 4/4: account assignments =="
-  ensure_account_assignment "${ACCOUNT_ID}" "${PS_PLATFORM_ARN}"   GROUP "${PA_GROUP_ID}"
-  ensure_account_assignment "${ACCOUNT_ID}" "${PS_BREAKGLASS_ARN}" GROUP "${BG_GROUP_ID}"
-
-  log "== resolving AWSReservedSSO role ARNs (best-effort) =="
-  PA_ROLE_ARN=$(resolve_reserved_sso_role_arn PlatformAdmin || true)
-  BG_ROLE_ARN=$(resolve_reserved_sso_role_arn BreakGlass    || true)
 
   print_outputs_human
   print_outputs_json > "${LOG_DIR}/3am-single-account-setup-outputs.json"
@@ -621,6 +1287,31 @@ resolve_outputs () {
 
   PA_ROLE_ARN=$(resolve_reserved_sso_role_arn PlatformAdmin || true)
   BG_ROLE_ARN=$(resolve_reserved_sso_role_arn BreakGlass    || true)
+
+  # Phase 5 outputs — re-resolve from AWS so this works from a fresh shell.
+  PARTITION=$(aws sts get-caller-identity --query Arn --output text 2>/dev/null | cut -d: -f2)
+  [ -n "$PARTITION" ] || PARTITION="aws"
+  EFFECTIVE_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-$(aws configure get region 2>/dev/null || true)}}"
+  if [ -z "$CUSTOMER_ID" ] && [ -n "$CUSTOMER_NAME" ]; then
+    CUSTOMER_ID=$(printf '%s' "${CUSTOMER_NAME}" \
+                    | tr '[:upper:]' '[:lower:]' \
+                    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+  fi
+  [ -n "$CUSTOMER_ID" ] && phase5_compute_axelspire_arns
+  DEPLOYMENT_ROLE_ARN=$(aws iam get-role --role-name "${DEPLOYMENT_ROLE_NAME}" \
+                          --query 'Role.Arn' --output text 2>/dev/null || echo "")
+  CUSTOMER_CMK_KEY_ID=$(aws kms describe-key --key-id "${CUSTOMER_CMK_ALIAS}" \
+                          --query 'KeyMetadata.KeyId' --output text 2>/dev/null || echo "")
+  if [ -n "$CUSTOMER_CMK_KEY_ID" ] && [ "$CUSTOMER_CMK_KEY_ID" != "None" ]; then
+    CUSTOMER_CMK_ARN=$(aws kms describe-key --key-id "${CUSTOMER_CMK_KEY_ID}" \
+                         --query 'KeyMetadata.Arn' --output text 2>/dev/null || echo "")
+  fi
+  EXTERNAL_ID_SECRET_ARN=$(aws secretsmanager describe-secret \
+                            --secret-id "${EXTERNAL_ID_SECRET_NAME}" \
+                            --query 'ARN' --output text 2>/dev/null || echo "")
+  [ "$EXTERNAL_ID_SECRET_ARN" = "None" ] && EXTERNAL_ID_SECRET_ARN=""
+  STATE_BUCKET_NAME="3am-state-${ACCOUNT_ID}-${EFFECTIVE_REGION}"
+  aws s3api head-bucket --bucket "${STATE_BUCKET_NAME}" 2>/dev/null || STATE_BUCKET_NAME=""
 }
 
 print_outputs_human () {
@@ -629,63 +1320,122 @@ print_outputs_human () {
 ================================================================
   3AM single-account-setup — outputs
 ================================================================
-  customer_name                     : ${CUSTOMER_NAME:-<unknown>}
-  account_id                        : ${ACCOUNT_ID:-<missing>}
-  identity_center_instance_arn      : ${INSTANCE_ARN:-<missing>}
-  identity_store_id                 : ${IDSTORE_ID:-<missing>}
-  region_deny_policy_id             : ${REGION_POLICY_ID:-<missing or skipped>}
-  root_user_deny_policy_id          : ${ROOT_POLICY_ID:-<missing or skipped>}
-  platform_admin_permission_set_arn : ${PS_PLATFORM_ARN:-<missing>}
-  breakglass_permission_set_arn     : ${PS_BREAKGLASS_ARN:-<missing>}
-  platform_admins_group_id          : ${PA_GROUP_ID:-<missing>}
-  breakglass_group_id               : ${BG_GROUP_ID:-<missing>}
-  platform_admin_role_arn           : ${PA_ROLE_ARN:-<pending — assignment not yet provisioned>}
-  breakglass_role_arn               : ${BG_ROLE_ARN:-<pending — assignment not yet provisioned>}
+  customer_name                       : ${CUSTOMER_NAME:-<unknown>}
+  customer_id                         : ${CUSTOMER_ID:-<unknown>}
+  account_id                          : ${ACCOUNT_ID:-<missing>}
+  region                              : ${EFFECTIVE_REGION:-<missing>}
+  partition                           : ${PARTITION:-<missing>}
+
+  Phase 0 (Identity Center / SCPs):
+  identity_center_instance_arn        : ${INSTANCE_ARN:-<missing>}
+  identity_store_id                   : ${IDSTORE_ID:-<missing>}
+  region_deny_policy_id               : ${REGION_POLICY_ID:-<missing or skipped>}
+  root_user_deny_policy_id            : ${ROOT_POLICY_ID:-<missing or skipped>}
+  platform_admin_permission_set_arn   : ${PS_PLATFORM_ARN:-<missing>}
+  breakglass_permission_set_arn       : ${PS_BREAKGLASS_ARN:-<missing>}
+  platform_admins_group_id            : ${PA_GROUP_ID:-<missing>}
+  breakglass_group_id                 : ${BG_GROUP_ID:-<missing>}
+  platform_admin_role_arn             : ${PA_ROLE_ARN:-<pending — assignment not yet provisioned>}
+  breakglass_role_arn                 : ${BG_ROLE_ARN:-<pending — assignment not yet provisioned>}
+
+  Phase 5 (bootstrap):
+  deployment_role_arn                 : ${DEPLOYMENT_ROLE_ARN:-<missing>}
+  customer_cmk_arn                    : ${CUSTOMER_CMK_ARN:-<missing>}
+  customer_cmk_alias                  : ${CUSTOMER_CMK_ALIAS}
+  external_id_secret_arn              : ${EXTERNAL_ID_SECRET_ARN:-<missing>}
+  state_bucket_name                   : ${STATE_BUCKET_NAME:-<missing>}
+  state_lock_table_name               : ${STATE_LOCK_TABLE_NAME}
+  axelspire_artifact_kms_key_arn      : ${AXELSPIRE_ARTIFACT_KMS_KEY_ARN:-<missing>}
+  axelspire_artifact_s3_bucket_arn    : ${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN:-<missing>}
 ================================================================
 
-Feed into 3am-infra-bootstrap as:
-  aws_account_id          = ${ACCOUNT_ID:-<missing>}
-  customer_admin_role_arns = [
-    "${PA_ROLE_ARN:-<missing>}",
-    "${BG_ROLE_ARN:-<missing>}",
-  ]
+Hand off to AxelSpire:
+  Send the file 3am-single-account-setup-outputs.json (in ${LOG_DIR})
+  to AxelSpire. It contains every ARN/ID needed to onboard this account
+  in the AxelSpire customer-onboard workflow.
 EOF
 }
 
 print_outputs_json () {
   if command -v jq >/dev/null 2>&1; then
     jq -n \
-      --arg customer_name      "${CUSTOMER_NAME}" \
-      --arg account_id         "${ACCOUNT_ID}" \
-      --arg instance_arn       "${INSTANCE_ARN}" \
-      --arg identity_store_id  "${IDSTORE_ID}" \
-      --arg region_policy_id   "${REGION_POLICY_ID}" \
-      --arg root_policy_id     "${ROOT_POLICY_ID}" \
-      --arg ps_platform_arn    "${PS_PLATFORM_ARN}" \
-      --arg ps_breakglass_arn  "${PS_BREAKGLASS_ARN}" \
-      --arg pa_group_id        "${PA_GROUP_ID}" \
-      --arg bg_group_id        "${BG_GROUP_ID}" \
-      --arg pa_role_arn        "${PA_ROLE_ARN}" \
-      --arg bg_role_arn        "${BG_ROLE_ARN}" \
+      --arg customer_name              "${CUSTOMER_NAME}" \
+      --arg customer_id                "${CUSTOMER_ID}" \
+      --arg account_id                 "${ACCOUNT_ID}" \
+      --arg region                     "${EFFECTIVE_REGION}" \
+      --arg partition                  "${PARTITION}" \
+      --arg instance_arn               "${INSTANCE_ARN}" \
+      --arg identity_store_id          "${IDSTORE_ID}" \
+      --arg region_policy_id           "${REGION_POLICY_ID}" \
+      --arg root_policy_id             "${ROOT_POLICY_ID}" \
+      --arg ps_platform_arn            "${PS_PLATFORM_ARN}" \
+      --arg ps_breakglass_arn          "${PS_BREAKGLASS_ARN}" \
+      --arg pa_group_id                "${PA_GROUP_ID}" \
+      --arg bg_group_id                "${BG_GROUP_ID}" \
+      --arg pa_role_arn                "${PA_ROLE_ARN}" \
+      --arg bg_role_arn                "${BG_ROLE_ARN}" \
+      --arg deployment_role_arn        "${DEPLOYMENT_ROLE_ARN}" \
+      --arg deployment_role_name       "${DEPLOYMENT_ROLE_NAME}" \
+      --arg customer_cmk_arn           "${CUSTOMER_CMK_ARN}" \
+      --arg customer_cmk_key_id        "${CUSTOMER_CMK_KEY_ID}" \
+      --arg customer_cmk_alias         "${CUSTOMER_CMK_ALIAS}" \
+      --arg external_id_secret_arn     "${EXTERNAL_ID_SECRET_ARN}" \
+      --arg external_id_secret_name    "${EXTERNAL_ID_SECRET_NAME}" \
+      --arg state_bucket_name          "${STATE_BUCKET_NAME}" \
+      --arg state_lock_table_name      "${STATE_LOCK_TABLE_NAME}" \
+      --arg axelspire_ci_account_id    "${AXELSPIRE_CI_ACCOUNT_ID}" \
+      --arg axelspire_ci_region        "${AXELSPIRE_CI_REGION}" \
+      --arg axelspire_ci_role_name     "${AXELSPIRE_CI_ROLE_NAME}" \
+      --arg axelspire_kms_arn          "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" \
+      --arg axelspire_s3_arn           "${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}" \
+      --arg bootstrap_version          "${BOOTSTRAP_VERSION}" \
       '{
+        bootstrap_version: $bootstrap_version,
         customer_name: $customer_name,
+        customer_id: $customer_id,
         account_id: $account_id,
-        identity_center_instance_arn: $instance_arn,
-        identity_store_id: $identity_store_id,
-        region_deny_policy_id: $region_policy_id,
-        root_user_deny_policy_id: $root_policy_id,
-        platform_admin_permission_set_arn: $ps_platform_arn,
-        breakglass_permission_set_arn: $ps_breakglass_arn,
-        platform_admins_group_id: $pa_group_id,
-        breakglass_group_id: $bg_group_id,
-        platform_admin_role_arn: $pa_role_arn,
-        breakglass_role_arn: $bg_role_arn,
-        customer_admin_role_arns: [$pa_role_arn, $bg_role_arn] | map(select(. != ""))
+        region: $region,
+        partition: $partition,
+        phase0: {
+          identity_center_instance_arn: $instance_arn,
+          identity_store_id: $identity_store_id,
+          region_deny_policy_id: $region_policy_id,
+          root_user_deny_policy_id: $root_policy_id,
+          platform_admin_permission_set_arn: $ps_platform_arn,
+          breakglass_permission_set_arn: $ps_breakglass_arn,
+          platform_admins_group_id: $pa_group_id,
+          breakglass_group_id: $bg_group_id,
+          platform_admin_role_arn: $pa_role_arn,
+          breakglass_role_arn: $bg_role_arn,
+          customer_admin_role_arns: [$pa_role_arn, $bg_role_arn] | map(select(. != ""))
+        },
+        phase5: {
+          deployment_role_name: $deployment_role_name,
+          deployment_role_arn: $deployment_role_arn,
+          customer_cmk_alias: $customer_cmk_alias,
+          customer_cmk_key_id: $customer_cmk_key_id,
+          customer_cmk_arn: $customer_cmk_arn,
+          external_id_secret_name: $external_id_secret_name,
+          external_id_secret_arn: $external_id_secret_arn,
+          state_bucket_name: $state_bucket_name,
+          state_lock_table_name: $state_lock_table_name,
+          axelspire_ci_account_id: $axelspire_ci_account_id,
+          axelspire_ci_region: $axelspire_ci_region,
+          axelspire_ci_role_name: $axelspire_ci_role_name,
+          axelspire_artifact_kms_key_arn: $axelspire_kms_arn,
+          axelspire_artifact_s3_bucket_arn: $axelspire_s3_arn
+        }
       }'
   else
+    # jq-less fallback. Flat shape (no nested objects) to keep the
+    # printf simple; consumers should prefer the jq path.
     printf '{\n'
+    printf '  "bootstrap_version": "%s",\n'                   "${BOOTSTRAP_VERSION}"
     printf '  "customer_name": "%s",\n'                       "${CUSTOMER_NAME}"
+    printf '  "customer_id": "%s",\n'                         "${CUSTOMER_ID}"
     printf '  "account_id": "%s",\n'                          "${ACCOUNT_ID}"
+    printf '  "region": "%s",\n'                              "${EFFECTIVE_REGION}"
+    printf '  "partition": "%s",\n'                           "${PARTITION}"
     printf '  "identity_center_instance_arn": "%s",\n'        "${INSTANCE_ARN}"
     printf '  "identity_store_id": "%s",\n'                   "${IDSTORE_ID}"
     printf '  "region_deny_policy_id": "%s",\n'               "${REGION_POLICY_ID}"
@@ -695,7 +1445,14 @@ print_outputs_json () {
     printf '  "platform_admins_group_id": "%s",\n'            "${PA_GROUP_ID}"
     printf '  "breakglass_group_id": "%s",\n'                 "${BG_GROUP_ID}"
     printf '  "platform_admin_role_arn": "%s",\n'             "${PA_ROLE_ARN}"
-    printf '  "breakglass_role_arn": "%s"\n'                  "${BG_ROLE_ARN}"
+    printf '  "breakglass_role_arn": "%s",\n'                 "${BG_ROLE_ARN}"
+    printf '  "deployment_role_arn": "%s",\n'                 "${DEPLOYMENT_ROLE_ARN}"
+    printf '  "customer_cmk_arn": "%s",\n'                    "${CUSTOMER_CMK_ARN}"
+    printf '  "external_id_secret_arn": "%s",\n'              "${EXTERNAL_ID_SECRET_ARN}"
+    printf '  "state_bucket_name": "%s",\n'                   "${STATE_BUCKET_NAME}"
+    printf '  "state_lock_table_name": "%s",\n'               "${STATE_LOCK_TABLE_NAME}"
+    printf '  "axelspire_artifact_kms_key_arn": "%s",\n'      "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"
+    printf '  "axelspire_artifact_s3_bucket_arn": "%s"\n'     "${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}"
     printf '}\n'
   fi
 }
@@ -720,6 +1477,7 @@ do_outputs_json () {
 # ---------------------------------------------------------------------------
 main () {
   if [ $# -eq 0 ]; then usage; exit 0; fi
+  INVOCATION_ARGV=( "$@" )
   parse_args "$@"
   case "${COMMAND}" in
     help|--help|-h) usage; exit 0 ;;

@@ -17,7 +17,7 @@ succeeds and the customer has shared the role ARN.
    [`_scripts/single-account-setup.sh`](../../_scripts/single-account-setup.sh)
    (uses the current Org-management account as the workload account —
    small customers / POCs). See the
-   [README → Org-level prep](../../README.md#org-level-prep-optional)
+   [README → Run the setup (CloudShell)](../../README.md#run-the-setup-cloudshell)
    section.
 2. Admin credentials for that account (e.g. an SSO role with
    `AdministratorAccess` or an equivalently-scoped custom role).
