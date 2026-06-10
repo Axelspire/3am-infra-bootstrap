@@ -20,6 +20,7 @@ and is the canonical source for the
 - [Reference](#reference) — what it creates, where it fits, security model
 - [Appendix A — OpenTofu module (optional)](#appendix-a--opentofu-module-optional)
 - [Appendix B — Manual AWS CLI walkthrough (reference only)](#appendix-b--manual-aws-cli-walkthrough-reference-only)
+- [Appendix C — AxelSpire CI role (informational)](#appendix-c--axelspire-ci-role-informational)
 
 ---
 
@@ -62,10 +63,13 @@ module — see [Security model](#security-model) and
 > `MalformedPolicyDocument: Invalid principal in policy` if it does
 > not. **AxelSpire must have provisioned `GitHubActions-CustomerDeploy`
 > in account `033113129683` before any customer bootstrap can run.**
-> This is a one-time AxelSpire-side setup, not per-customer. Override
-> the role name with `--axelspire-ci-role-name` if AxelSpire has
-> renamed it; override the account with `--axelspire-ci-account-id`
-> for non-production AxelSpire environments. See
+> This is a one-time AxelSpire-side setup, not per-customer. The
+> exact console steps AxelSpire follows are documented in
+> [Appendix C](#appendix-c--axelspire-ci-role-informational) so
+> customers can audit what trusts what. Override the role name with
+> `--axelspire-ci-role-name` if AxelSpire has renamed it; override
+> the account with `--axelspire-ci-account-id` for non-production
+> AxelSpire environments. See
 > [Troubleshooting → Invalid principal in policy](#troubleshooting).
 
 ```sh
@@ -295,9 +299,12 @@ To resolve:
    ```
 
    An empty result or `NoSuchEntity` means the role is missing.
-2. Once AxelSpire has created the role, re-run the script. Phase 0
-   work and any Phase 5 work completed before the failure is
-   idempotently reused; the apply resumes at Phase 5 step 3/6.
+2. Once AxelSpire has created the role (see
+   [Appendix C](#appendix-c--axelspire-ci-role-informational) for
+   the exact console walkthrough AxelSpire follows), re-run the
+   script. Phase 0 work and any Phase 5 work completed before the
+   failure is idempotently reused; the apply resumes at Phase 5
+   step 3/6.
 3. If you have been pointed at a non-production AxelSpire
    environment (different account ID or a renamed CI role), pass
    `--axelspire-ci-account-id <id>` and `--axelspire-ci-role-name
@@ -972,3 +979,188 @@ jq -n \
     bootstrap_version:                 "0.1.0"
   }' > handoff.json
 ```
+
+
+## Appendix C — AxelSpire CI role (informational)
+
+This appendix documents the one-time, AxelSpire-side console
+walkthrough used to provision `GitHubActions-CustomerDeploy` in the
+AxelSpire CI account (`033113129683`). It is **not** something
+customers run — it is published here so customers can audit which
+GitHub workflow / branch / repository is trusted to assume into
+their `ThreeAM-Deployment` role.
+
+If `GitHubActions-CustomerDeploy` already exists, skip this
+appendix. To check:
+
+```sh
+aws iam get-role --role-name GitHubActions-CustomerDeploy \
+  --query 'Role.Arn' --output text
+```
+
+### Step 1 — GitHub OIDC identity provider (one-time per account)
+
+The role is federated by GitHub Actions, so the GitHub OIDC provider
+must exist in the AxelSpire CI account before the role can be
+created. Skip this step if the provider is already present:
+
+```sh
+aws iam list-open-id-connect-providers \
+  --query "OpenIDConnectProviderList[?contains(Arn,'token.actions.githubusercontent.com')].Arn" \
+  --output text
+```
+
+If empty:
+
+1. Sign in to the AxelSpire CI account (`033113129683`) with
+   `AdministratorAccess`.
+2. **IAM → Identity providers → Add provider**.
+3. Provider type: **OpenID Connect**.
+4. Provider URL: `https://token.actions.githubusercontent.com` →
+   click **Get thumbprint**.
+5. Audience: `sts.amazonaws.com`.
+6. **Add provider**.
+
+### Step 2 — Create the role
+
+1. **IAM → Roles → Create role**.
+2. Trusted entity type: **Web identity**.
+3. Identity provider: `token.actions.githubusercontent.com`.
+4. Audience: `sts.amazonaws.com`.
+5. GitHub organization: `Axelspire`.
+6. GitHub repository: `3am-deployments`.
+7. Leave GitHub branch empty (the `customer-deploy` workflow runs
+   on both PRs and pushes to `main`; the trust policy edit in
+   step 3 narrows this further).
+8. **Next**. Do **not** attach any managed policies — they are
+   added inline in step 4. **Next**.
+9. Role name: `GitHubActions-CustomerDeploy`.
+10. Description: `Assumed by Axelspire/3am-deployments customer-deploy workflow to chain into each customer's ThreeAM-Deployment role.`
+11. Tags: `Service=3am`, `ManagedBy=console`,
+    `Repo=Axelspire/3am-deployments`.
+12. **Create role**.
+
+### Step 3 — Replace the trust policy
+
+The console-generated trust policy allows any branch of the repo and
+omits `sts:TagSession`. The deploy chain in
+`3am-deployments/_common/provider.tftpl` sets session tags, so
+`TagSession` must be allowed. Replace the trust policy verbatim:
+
+1. Open the new `GitHubActions-CustomerDeploy` role.
+2. **Trust relationships → Edit trust policy**.
+3. Replace the JSON with:
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [{
+       "Sid": "AllowGitHubActions3amDeployments",
+       "Effect": "Allow",
+       "Principal": {
+         "Federated": "arn:aws:iam::033113129683:oidc-provider/token.actions.githubusercontent.com"
+       },
+       "Action": ["sts:AssumeRoleWithWebIdentity", "sts:TagSession"],
+       "Condition": {
+         "StringEquals": {
+           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+         },
+         "StringLike": {
+           "token.actions.githubusercontent.com:sub": "repo:Axelspire/3am-deployments:*"
+         }
+       }
+     }]
+   }
+   ```
+
+4. **Update policy**.
+
+### Step 4 — Attach the inline permissions policy
+
+1. **Permissions → Add permissions → Create inline policy → JSON**.
+2. Paste:
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Sid": "AssumeCustomerDeploymentRole",
+         "Effect": "Allow",
+         "Action": ["sts:AssumeRole", "sts:TagSession"],
+         "Resource": "arn:aws:iam::*:role/ThreeAM-Deployment",
+         "Condition": {
+           "StringLike": {
+             "sts:RoleSessionName": ["tg-*", "3am-*"]
+           }
+         }
+       },
+       {
+         "Sid": "ReadWriteCustomerState",
+         "Effect": "Allow",
+         "Action": [
+           "s3:GetObject", "s3:PutObject", "s3:DeleteObject",
+           "s3:ListBucket", "s3:GetBucketVersioning"
+         ],
+         "Resource": [
+           "arn:aws:s3:::3am-state-*",
+           "arn:aws:s3:::3am-state-*/*"
+         ]
+       },
+       {
+         "Sid": "LockCustomerState",
+         "Effect": "Allow",
+         "Action": [
+           "dynamodb:GetItem", "dynamodb:PutItem",
+           "dynamodb:DeleteItem", "dynamodb:DescribeTable"
+         ],
+         "Resource": "arn:aws:dynamodb:*:*:table/3am-state-lock"
+       },
+       {
+         "Sid": "UseAxelspireCiKeys",
+         "Effect": "Allow",
+         "Action": [
+           "kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*",
+           "kms:GenerateDataKey*", "kms:DescribeKey"
+         ],
+         "Resource": "arn:aws:kms:*:033113129683:key/*",
+         "Condition": {
+           "ForAnyValue:StringLike": {
+             "kms:ResourceAliases": "alias/3am-ci/*"
+           }
+         }
+       }
+     ]
+   }
+   ```
+
+3. Policy name: `customer-deploy-permissions`. **Create policy**.
+
+### Step 5 — Verify
+
+```sh
+aws iam get-role --role-name GitHubActions-CustomerDeploy \
+  --query 'Role.Arn' --output text
+aws iam list-role-policies --role-name GitHubActions-CustomerDeploy
+```
+
+Expect `arn:aws:iam::033113129683:role/GitHubActions-CustomerDeploy`
+and `customer-deploy-permissions` in the inline policies list.
+Customer-side `apply` runs can now proceed.
+
+### What customers should verify on their side
+
+After AxelSpire has provisioned the role, a customer can confirm
+the trust relationship from their own workload account at any time:
+
+```sh
+aws iam get-role --role-name ThreeAM-Deployment \
+  --query 'Role.AssumeRolePolicyDocument.Statement[0].Principal.AWS' \
+  --output text
+# → arn:aws:iam::033113129683:role/GitHubActions-CustomerDeploy
+```
+
+That single ARN is the entirety of AxelSpire's access. Revocation
+is unilateral: remove the trust statement or detach the inline
+permissions on `ThreeAM-Deployment`, and AxelSpire's pipeline is
+locked out within seconds.
