@@ -33,6 +33,16 @@ succeeds and the customer has shared the role ARN.
    of the per-customer CI CMK + ARN of the shared CI artifacts bucket).
    These appear in the body of the merged AxelSpire `customer-onboard`
    PR.
+6. **`GitHubActions-CustomerDeploy` IAM role provisioned in account
+   `033113129683`** (or whichever AxelSpire CI account / role name
+   the per-customer hand-off bundle specifies). The `ThreeAM-Deployment`
+   trust policy names that role ARN as its principal; `tofu apply`
+   fails with `MalformedPolicyDocument: Invalid principal in policy`
+   if the role does not exist at apply time. This is a one-time
+   AxelSpire-side setup, not per-customer. Confirm with AxelSpire
+   before applying — see the top-level [README →
+   Troubleshooting](../../README.md#troubleshooting) entry for the
+   exact diagnostic command.
 
 ## Apply
 

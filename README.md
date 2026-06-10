@@ -54,6 +54,20 @@ the separate `ThreeAM-Deployment` IAM role provisioned later by this
 module — see [Security model](#security-model) and
 [`docs/REVIEWING.md`](docs/REVIEWING.md).
 
+> **AxelSpire-side prerequisite.** The `ThreeAM-Deployment` trust
+> policy created in Phase 5 names the AxelSpire CI role
+> `arn:aws:iam::033113129683:role/GitHubActions-CustomerDeploy` as
+> its principal. IAM validates that this role exists at
+> `CreateRole` time and rejects the trust policy with
+> `MalformedPolicyDocument: Invalid principal in policy` if it does
+> not. **AxelSpire must have provisioned `GitHubActions-CustomerDeploy`
+> in account `033113129683` before any customer bootstrap can run.**
+> This is a one-time AxelSpire-side setup, not per-customer. Override
+> the role name with `--axelspire-ci-role-name` if AxelSpire has
+> renamed it; override the account with `--axelspire-ci-account-id`
+> for non-production AxelSpire environments. See
+> [Troubleshooting → Invalid principal in policy](#troubleshooting).
+
 ```sh
 # Multi-account (creates a new child account in a 3AM OU)
 curl -fsSLO https://raw.githubusercontent.com/Axelspire/3am-infra-bootstrap/main/_scripts/customer-org-setup.sh
@@ -255,6 +269,42 @@ To resolve:
 > message, so the mismatch is obvious. To re-run in a different
 > region, prefix with `AWS_REGION=<region>` — the failure message
 > spells out the exact command.
+
+**`An error occurred (MalformedPolicyDocument) when calling the CreateRole operation: Invalid principal in policy: "AWS":"arn:aws:iam::033113129683:role/GitHubActions-CustomerDeploy"`**
+
+Phase 5 step 3/6 (`ThreeAM-Deployment role`) writes a trust policy
+whose principal is the AxelSpire CI role ARN. AWS IAM resolves that
+ARN to the role's internal unique-id at save time and rejects the
+trust policy as malformed if no such role exists in the principal's
+account.
+
+This means **the AxelSpire CI role does not exist in account
+`033113129683`** (or whichever account / role name has been passed
+via `--axelspire-ci-account-id` / `--axelspire-ci-role-name`). It is
+an AxelSpire-side prerequisite, not a customer-side fix.
+
+To resolve:
+
+1. Confirm with AxelSpire that `GitHubActions-CustomerDeploy` is
+   provisioned in account `033113129683`. From any session with
+   read access to that account:
+
+   ```sh
+   aws iam get-role --role-name GitHubActions-CustomerDeploy \
+     --query 'Role.Arn' --output text
+   ```
+
+   An empty result or `NoSuchEntity` means the role is missing.
+2. Once AxelSpire has created the role, re-run the script. Phase 0
+   work and any Phase 5 work completed before the failure is
+   idempotently reused; the apply resumes at Phase 5 step 3/6.
+3. If you have been pointed at a non-production AxelSpire
+   environment (different account ID or a renamed CI role), pass
+   `--axelspire-ci-account-id <id>` and `--axelspire-ci-role-name
+   <name>` on the next run. The values are also propagated into
+   `phase5.axelspire_ci_account_id` / `phase5.axelspire_ci_role_name`
+   in the output JSON, so the hand-off to AxelSpire stays
+   self-describing.
 
 ---
 
