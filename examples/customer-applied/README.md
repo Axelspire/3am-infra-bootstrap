@@ -55,7 +55,7 @@ tofu apply \
   -var axelspire_ci_account_id=033113129683 \
   -var 'customer_admin_role_arns=["arn:aws:iam::123456789012:role/PlatformAdmin"]' \
   -var axelspire_artifact_kms_key_arn=arn:aws:kms:eu-west-1:033113129683:alias/3am-ci/acme-corp \
-  -var axelspire_artifact_s3_bucket_arn=arn:aws:s3:::3am-ci-artifacts-033113129683-eu-west-1
+  -var axelspire_artifact_s3_bucket_arn=arn:aws:s3:::3am-ci-artifacts-033113129683
 ```
 
 ## Hand-off

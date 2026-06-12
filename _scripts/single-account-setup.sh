@@ -184,8 +184,9 @@ Phase 5 tuning (defaults are correct for the standard AxelSpire setup):
                                 'apply' unless --skip-bootstrap is set.
   --axelspire-artifact-s3-bucket-arn ARN
                                 Override the deterministic
-                                arn:aws:s3:::3am-ci-artifacts-<ci-acct>-
-                                <ci-region> bucket ARN. Optional;
+                                arn:aws:s3:::3am-ci-artifacts-<ci-acct>
+                                bucket ARN (CI account is single-region;
+                                no region suffix). Optional;
                                 documentation-only (no API calls in this
                                 script reference it).
   --external-id-secret-name N   Default: /3am/license/external-id.
@@ -623,7 +624,7 @@ phase5_compute_axelspire_arns () {
     AXELSPIRE_ARTIFACT_KMS_KEY_ARN="arn:${PARTITION}:kms:${AXELSPIRE_CI_REGION}:${AXELSPIRE_CI_ACCOUNT_ID}:alias/3am-ci/${CUSTOMER_ID}"
   fi
   if [ -z "${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}" ]; then
-    AXELSPIRE_ARTIFACT_S3_BUCKET_ARN="arn:${PARTITION}:s3:::3am-ci-artifacts-${AXELSPIRE_CI_ACCOUNT_ID}-${AXELSPIRE_CI_REGION}"
+    AXELSPIRE_ARTIFACT_S3_BUCKET_ARN="arn:${PARTITION}:s3:::3am-ci-artifacts-${AXELSPIRE_CI_ACCOUNT_ID}"
   fi
 }
 

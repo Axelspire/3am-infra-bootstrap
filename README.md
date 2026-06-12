@@ -190,7 +190,7 @@ two nested objects — `phase0` (Identity Center / SCPs) and `phase5`
     "axelspire_ci_region":     "eu-west-1",
     "axelspire_ci_role_name":  "GitHubActions-CustomerDeploy",
     "axelspire_artifact_kms_key_arn":   "arn:aws:kms:eu-west-1:033113129683:alias/3am-ci/acme-corp",
-    "axelspire_artifact_s3_bucket_arn": "arn:aws:s3:::3am-ci-artifacts-033113129683-eu-west-1"
+    "axelspire_artifact_s3_bucket_arn": "arn:aws:s3:::3am-ci-artifacts-033113129683"
   }
 }
 ```
@@ -476,7 +476,7 @@ not a runner of this module.
 | DynamoDB table | `3am-state-lock` | Customer | Terraform state locking. PITR enabled, **SSE-KMS using the AxelSpire CI CMK** (kill-switch). |
 | SSM parameters | `/3am/{kms,state,iam,bootstrap,axelspire}/...` | Customer | Runtime discovery of the above by downstream stacks. |
 | _(reference only)_ KMS key | `alias/3am-ci/<customer-id>` | **AxelSpire CI** | Encrypts customer state + Lambda artifacts. Disabled by AxelSpire at license end to render state and code unreadable without touching customer-owned resources. |
-| _(reference only)_ S3 bucket | `3am-ci-artifacts-<ci-account>-<region>` | **AxelSpire CI** | Shared (per-region) bucket holding encrypted Lambda code zips for all enrolled customers. |
+| _(reference only)_ S3 bucket | `3am-ci-artifacts-<ci-account>` | **AxelSpire CI** | Shared bucket (single-region, in the CI primary region) holding encrypted Lambda code zips for all enrolled customers. |
 
 ### How it fits the wider 3AM platform
 
@@ -573,7 +573,7 @@ customer_admin_role_arns         = [
   "arn:aws:iam::123456789012:role/BreakGlass",
 ]
 axelspire_artifact_kms_key_arn   = "arn:aws:kms:eu-west-1:033113129683:alias/3am-ci/acme-corp"
-axelspire_artifact_s3_bucket_arn = "arn:aws:s3:::3am-ci-artifacts-033113129683-eu-west-1"
+axelspire_artifact_s3_bucket_arn = "arn:aws:s3:::3am-ci-artifacts-033113129683"
 ```
 
 ### A.2 — apply
