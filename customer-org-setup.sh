@@ -49,7 +49,6 @@ DEPLOYMENT_ROLE_NAME="ThreeAM-Deployment"
 EXTERNAL_ID_SECRET_NAME="/3am/license/external-id"
 REQUIRE_LICENSE_SESSION_TAG=true
 KMS_MULTI_REGION=false
-KMS_DELETION_WINDOW_DAYS=30
 STATE_LOCK_TABLE_NAME="3am-state-lock"
 CUSTOMER_CMK_ALIAS="alias/3am-customer-cmk"
 ORG_ACCESS_ROLE_NAME="OrganizationAccountAccessRole"
@@ -161,15 +160,31 @@ Optional:
 Phase 5 tuning (defaults are correct for the standard AxelSpire setup):
   --axelspire-ci-account-id ID  Default: 033113129683.
   --axelspire-ci-region REGION  Default: eu-west-1. Used to derive the
-                                AxelSpire CI KMS key and artifacts bucket
-                                ARNs deterministically.
+                                AxelSpire CI artifacts bucket ARN
+                                deterministically and as a documentation
+                                hint for the alias ARN.
   --axelspire-ci-role-name NAME Default: GitHubActions-CustomerDeploy.
+  --axelspire-artifact-kms-key-arn ARN
+                                Real key ARN (NOT an alias ARN) of the
+                                AxelSpire-owned CI CMK that encrypts this
+                                customer's state bucket and DynamoDB lock
+                                table. DynamoDB rejects cross-account
+                                alias ARNs at CreateTable, so the key
+                                must be pre-provisioned by AxelSpire and
+                                its real ARN supplied here. Required for
+                                'apply' unless --skip-bootstrap is set.
+  --axelspire-artifact-s3-bucket-arn ARN
+                                Override the deterministic
+                                arn:aws:s3:::3am-ci-artifacts-<ci-acct>
+                                bucket ARN (CI account is single-region;
+                                no region suffix). Optional;
+                                documentation-only (no API calls in this
+                                script reference it).
   --external-id-secret-name N   Default: /3am/license/external-id.
                                 Auto-created (32-byte hex) if missing.
   --no-license-session-tag      Drop the aws:RequestTag/LicenseValid
                                 condition from the role trust policy.
   --kms-multi-region            Create the customer CMK as multi-region.
-  --kms-deletion-window-days N  CMK deletion window, 7-30. Default: 30.
   --org-access-role NAME        IAM role to assume into the child account
                                 for Phase 5. Default: OrganizationAccount-
                                 AccessRole.
@@ -217,10 +232,11 @@ parse_args () {
       --axelspire-ci-account-id)   AXELSPIRE_CI_ACCOUNT_ID="$2"; shift 2 ;;
       --axelspire-ci-region)       AXELSPIRE_CI_REGION="$2"; shift 2 ;;
       --axelspire-ci-role-name)    AXELSPIRE_CI_ROLE_NAME="$2"; shift 2 ;;
+      --axelspire-artifact-kms-key-arn)    AXELSPIRE_ARTIFACT_KMS_KEY_ARN="$2"; shift 2 ;;
+      --axelspire-artifact-s3-bucket-arn)  AXELSPIRE_ARTIFACT_S3_BUCKET_ARN="$2"; shift 2 ;;
       --external-id-secret-name)   EXTERNAL_ID_SECRET_NAME="$2"; shift 2 ;;
       --no-license-session-tag)    REQUIRE_LICENSE_SESSION_TAG=false; shift ;;
       --kms-multi-region)          KMS_MULTI_REGION=true; shift ;;
-      --kms-deletion-window-days)  KMS_DELETION_WINDOW_DAYS="$2"; shift 2 ;;
       --org-access-role)           ORG_ACCESS_ROLE_NAME="$2"; shift 2 ;;
       --auto-approve)              AUTO_APPROVE=true; shift ;;
       --log-dir)                   LOG_DIR="$2"; shift 2 ;;
@@ -643,12 +659,39 @@ resolve_customer_id () {
   echo "${CUSTOMER_ID}" | grep -qE '^[a-z0-9-]+$' || die "--customer-id '${CUSTOMER_ID}' must be lowercase alphanumeric with hyphens only"
 }
 
-# Derive the AxelSpire-side ARNs deterministically from --customer-id
-# and the AxelSpire CI account/region. AxelSpire's customer-onboard
-# workflow uses the same formulas.
+# Derive the AxelSpire-side ARNs. The S3 bucket ARN follows a
+# deterministic naming convention. The KMS value falls back to a
+# documentation-only alias ARN — DynamoDB CreateTable will reject
+# cross-account alias ARNs, so 'apply' requires the operator to
+# pass the real key ARN via --axelspire-artifact-kms-key-arn.
+# CLI-supplied values (set by parse_args) are preserved.
 phase5_compute_axelspire_arns () {
-  AXELSPIRE_ARTIFACT_KMS_KEY_ARN="arn:${PARTITION}:kms:${AXELSPIRE_CI_REGION}:${AXELSPIRE_CI_ACCOUNT_ID}:alias/3am-ci/${CUSTOMER_ID}"
-  AXELSPIRE_ARTIFACT_S3_BUCKET_ARN="arn:${PARTITION}:s3:::3am-ci-artifacts-${AXELSPIRE_CI_ACCOUNT_ID}"
+  if [ -z "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" ]; then
+    AXELSPIRE_ARTIFACT_KMS_KEY_ARN="arn:${PARTITION}:kms:${AXELSPIRE_CI_REGION}:${AXELSPIRE_CI_ACCOUNT_ID}:alias/3am-ci/${CUSTOMER_ID}"
+  fi
+  if [ -z "${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}" ]; then
+    AXELSPIRE_ARTIFACT_S3_BUCKET_ARN="arn:${PARTITION}:s3:::3am-ci-artifacts-${AXELSPIRE_CI_ACCOUNT_ID}"
+  fi
+}
+
+# Persist customer_id / customer_name as tags on the child AWS account so a
+# later 'outputs' / 'outputs-json' invocation in a fresh shell can recover
+# them without operator-supplied flags. Idempotent (TagResource overwrites
+# existing values). Best-effort: warns rather than dies on failure, since
+# losing the persistence layer does not affect the current apply.
+tag_child_account_with_customer_metadata () {
+  [ -n "${ACCOUNT_ID}" ] && [ "${ACCOUNT_ID}" != "None" ] \
+    || { warn "tag_child_account: ACCOUNT_ID not set; skipping"; return 0; }
+  [ -n "${CUSTOMER_ID}" ] \
+    || { warn "tag_child_account: CUSTOMER_ID not set; skipping"; return 0; }
+  log "tagging account ${ACCOUNT_ID} with CustomerId=${CUSTOMER_ID}"
+  aws organizations tag-resource --resource-id "${ACCOUNT_ID}" --tags \
+    "Key=CustomerId,Value=${CUSTOMER_ID}" \
+    "Key=CustomerName,Value=${CUSTOMER_NAME}" \
+    "Key=ManagedBy,Value=customer-org-setup.sh" \
+    "Key=BootstrapVersion,Value=${BOOTSTRAP_VERSION}" \
+    >/dev/null 2>&1 \
+    || warn "tag_child_account: organizations:TagResource failed (need organizations:TagResource permission). Slug will still appear in this run's JSON, but later 'outputs-json' invocations will not be able to recover it."
 }
 
 # Saved management-account credentials. assume_workload_creds stashes
@@ -1215,6 +1258,14 @@ do_apply () {
     [ -n "$PLATFORM_ADMIN_USER" ] || die "--platform-admin-user required (or pass --external-idp)"
     [ -n "$BREAKGLASS_USER" ]     || die "--breakglass-user required (or pass --external-idp)"
   fi
+  # The AxelSpire CI CMK encrypts both the customer state bucket and
+  # the DynamoDB lock table. DynamoDB rejects cross-account alias
+  # ARNs at CreateTable, so the real key ARN must be supplied. Bail
+  # out before any AWS write if Phase 5 is in scope and the flag is
+  # missing.
+  if ! ${SKIP_BOOTSTRAP} && [ -z "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" ]; then
+    die "--axelspire-artifact-kms-key-arn is required for 'apply' (Phase 5 encrypts the state bucket and lock table with AxelSpire's CI CMK; DynamoDB requires the real key ARN, not an alias ARN). Coordinate with AxelSpire to obtain the per-customer CI CMK ARN, or pass --skip-bootstrap to run Phase 0 only."
+  fi
 
   preflight
   resolve_customer_id
@@ -1245,6 +1296,7 @@ do_apply () {
   log "== Phase 0 step 2/6: AWS account =="
   ACCOUNT_ID=$(get_or_create_account "${ACCOUNT_NAME}" "${ACCOUNT_EMAIL}")
   move_account_if_needed "${ACCOUNT_ID}" "${OU_ID}"
+  tag_child_account_with_customer_metadata
 
   if ${SKIP_SCPS}; then
     log "== Phase 0 step 3/6: SCPs (skipped, --skip-scps) =="
@@ -1325,6 +1377,22 @@ resolve_outputs () {
   ACCOUNT_ID=$(aws organizations list-accounts \
                 --query "Accounts[?Name==\`${ACCOUNT_NAME}\`].Id | [0]" \
                 --output text 2>/dev/null || echo "")
+
+  # Recover customer_id / customer_name from the child-account tags written
+  # by tag_child_account_with_customer_metadata during apply, so a fresh
+  # shell can run 'outputs' / 'outputs-json' without any --customer-* flags.
+  if [ -n "${ACCOUNT_ID}" ] && [ "${ACCOUNT_ID}" != "None" ]; then
+    if [ -z "${CUSTOMER_ID}" ]; then
+      CUSTOMER_ID=$(aws organizations list-tags-for-resource --resource-id "${ACCOUNT_ID}" \
+                      --query "Tags[?Key=='CustomerId'].Value | [0]" --output text 2>/dev/null || echo "")
+      [ "${CUSTOMER_ID}" = "None" ] && CUSTOMER_ID=""
+    fi
+    if [ -z "${CUSTOMER_NAME}" ]; then
+      CUSTOMER_NAME=$(aws organizations list-tags-for-resource --resource-id "${ACCOUNT_ID}" \
+                       --query "Tags[?Key=='CustomerName'].Value | [0]" --output text 2>/dev/null || echo "")
+      [ "${CUSTOMER_NAME}" = "None" ] && CUSTOMER_NAME=""
+    fi
+  fi
 
   REGION_POLICY_ID=$(aws organizations list-policies --filter SERVICE_CONTROL_POLICY \
                       --query 'Policies[?Name==`3am-region-deny`].Id | [0]' --output text 2>/dev/null || echo "")

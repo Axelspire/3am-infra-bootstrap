@@ -49,7 +49,6 @@ DEPLOYMENT_ROLE_NAME="ThreeAM-Deployment"
 EXTERNAL_ID_SECRET_NAME="/3am/license/external-id"
 REQUIRE_LICENSE_SESSION_TAG=true
 KMS_MULTI_REGION=false
-KMS_DELETION_WINDOW_DAYS=30
 STATE_LOCK_TABLE_NAME="3am-state-lock"
 CUSTOMER_CMK_ALIAS="alias/3am-customer-cmk"
 ORG_ACCESS_ROLE_NAME="OrganizationAccountAccessRole"
@@ -186,7 +185,6 @@ Phase 5 tuning (defaults are correct for the standard AxelSpire setup):
   --no-license-session-tag      Drop the aws:RequestTag/LicenseValid
                                 condition from the role trust policy.
   --kms-multi-region            Create the customer CMK as multi-region.
-  --kms-deletion-window-days N  CMK deletion window, 7-30. Default: 30.
   --org-access-role NAME        IAM role to assume into the child account
                                 for Phase 5. Default: OrganizationAccount-
                                 AccessRole.
@@ -239,7 +237,6 @@ parse_args () {
       --external-id-secret-name)   EXTERNAL_ID_SECRET_NAME="$2"; shift 2 ;;
       --no-license-session-tag)    REQUIRE_LICENSE_SESSION_TAG=false; shift ;;
       --kms-multi-region)          KMS_MULTI_REGION=true; shift ;;
-      --kms-deletion-window-days)  KMS_DELETION_WINDOW_DAYS="$2"; shift 2 ;;
       --org-access-role)           ORG_ACCESS_ROLE_NAME="$2"; shift 2 ;;
       --auto-approve)              AUTO_APPROVE=true; shift ;;
       --log-dir)                   LOG_DIR="$2"; shift 2 ;;
@@ -675,6 +672,26 @@ phase5_compute_axelspire_arns () {
   if [ -z "${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}" ]; then
     AXELSPIRE_ARTIFACT_S3_BUCKET_ARN="arn:${PARTITION}:s3:::3am-ci-artifacts-${AXELSPIRE_CI_ACCOUNT_ID}"
   fi
+}
+
+# Persist customer_id / customer_name as tags on the child AWS account so a
+# later 'outputs' / 'outputs-json' invocation in a fresh shell can recover
+# them without operator-supplied flags. Idempotent (TagResource overwrites
+# existing values). Best-effort: warns rather than dies on failure, since
+# losing the persistence layer does not affect the current apply.
+tag_child_account_with_customer_metadata () {
+  [ -n "${ACCOUNT_ID}" ] && [ "${ACCOUNT_ID}" != "None" ] \
+    || { warn "tag_child_account: ACCOUNT_ID not set; skipping"; return 0; }
+  [ -n "${CUSTOMER_ID}" ] \
+    || { warn "tag_child_account: CUSTOMER_ID not set; skipping"; return 0; }
+  log "tagging account ${ACCOUNT_ID} with CustomerId=${CUSTOMER_ID}"
+  aws organizations tag-resource --resource-id "${ACCOUNT_ID}" --tags \
+    "Key=CustomerId,Value=${CUSTOMER_ID}" \
+    "Key=CustomerName,Value=${CUSTOMER_NAME}" \
+    "Key=ManagedBy,Value=customer-org-setup.sh" \
+    "Key=BootstrapVersion,Value=${BOOTSTRAP_VERSION}" \
+    >/dev/null 2>&1 \
+    || warn "tag_child_account: organizations:TagResource failed (need organizations:TagResource permission). Slug will still appear in this run's JSON, but later 'outputs-json' invocations will not be able to recover it."
 }
 
 # Saved management-account credentials. assume_workload_creds stashes
@@ -1279,6 +1296,7 @@ do_apply () {
   log "== Phase 0 step 2/6: AWS account =="
   ACCOUNT_ID=$(get_or_create_account "${ACCOUNT_NAME}" "${ACCOUNT_EMAIL}")
   move_account_if_needed "${ACCOUNT_ID}" "${OU_ID}"
+  tag_child_account_with_customer_metadata
 
   if ${SKIP_SCPS}; then
     log "== Phase 0 step 3/6: SCPs (skipped, --skip-scps) =="
@@ -1359,6 +1377,22 @@ resolve_outputs () {
   ACCOUNT_ID=$(aws organizations list-accounts \
                 --query "Accounts[?Name==\`${ACCOUNT_NAME}\`].Id | [0]" \
                 --output text 2>/dev/null || echo "")
+
+  # Recover customer_id / customer_name from the child-account tags written
+  # by tag_child_account_with_customer_metadata during apply, so a fresh
+  # shell can run 'outputs' / 'outputs-json' without any --customer-* flags.
+  if [ -n "${ACCOUNT_ID}" ] && [ "${ACCOUNT_ID}" != "None" ]; then
+    if [ -z "${CUSTOMER_ID}" ]; then
+      CUSTOMER_ID=$(aws organizations list-tags-for-resource --resource-id "${ACCOUNT_ID}" \
+                      --query "Tags[?Key=='CustomerId'].Value | [0]" --output text 2>/dev/null || echo "")
+      [ "${CUSTOMER_ID}" = "None" ] && CUSTOMER_ID=""
+    fi
+    if [ -z "${CUSTOMER_NAME}" ]; then
+      CUSTOMER_NAME=$(aws organizations list-tags-for-resource --resource-id "${ACCOUNT_ID}" \
+                       --query "Tags[?Key=='CustomerName'].Value | [0]" --output text 2>/dev/null || echo "")
+      [ "${CUSTOMER_NAME}" = "None" ] && CUSTOMER_NAME=""
+    fi
+  fi
 
   REGION_POLICY_ID=$(aws organizations list-policies --filter SERVICE_CONTROL_POLICY \
                       --query 'Policies[?Name==`3am-region-deny`].Id | [0]' --output text 2>/dev/null || echo "")

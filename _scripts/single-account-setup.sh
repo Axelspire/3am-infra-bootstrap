@@ -57,7 +57,6 @@ DEPLOYMENT_ROLE_NAME="ThreeAM-Deployment"
 EXTERNAL_ID_SECRET_NAME="/3am/license/external-id"
 REQUIRE_LICENSE_SESSION_TAG=true
 KMS_MULTI_REGION=false
-KMS_DELETION_WINDOW_DAYS=30
 STATE_LOCK_TABLE_NAME="3am-state-lock"
 CUSTOMER_CMK_ALIAS="alias/3am-customer-cmk"
 
@@ -194,7 +193,6 @@ Phase 5 tuning (defaults are correct for the standard AxelSpire setup):
   --no-license-session-tag      Drop the aws:RequestTag/LicenseValid
                                 condition from the role trust policy.
   --kms-multi-region            Create the customer CMK as multi-region.
-  --kms-deletion-window-days N  CMK deletion window, 7-30. Default: 30.
 
   --auto-approve                Skip interactive confirmation.
   --log-dir PATH                Default: $HOME (CloudShell-persistent).
@@ -249,7 +247,6 @@ parse_args () {
       --external-id-secret-name)   EXTERNAL_ID_SECRET_NAME="$2"; shift 2 ;;
       --no-license-session-tag)    REQUIRE_LICENSE_SESSION_TAG=false; shift ;;
       --kms-multi-region)          KMS_MULTI_REGION=true; shift ;;
-      --kms-deletion-window-days)  KMS_DELETION_WINDOW_DAYS="$2"; shift 2 ;;
       --auto-approve)              AUTO_APPROVE=true; shift ;;
       --log-dir)                   LOG_DIR="$2"; shift 2 ;;
       --quiet)                     QUIET=true; shift ;;
