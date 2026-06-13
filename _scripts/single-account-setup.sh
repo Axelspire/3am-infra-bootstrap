@@ -173,14 +173,15 @@ Phase 5 tuning (defaults are correct for the standard AxelSpire setup):
                                 hint for the alias ARN.
   --axelspire-ci-role-name NAME Default: GitHubActions-CustomerDeploy.
   --axelspire-artifact-kms-key-arn ARN
-                                Real key ARN (NOT an alias ARN) of the
-                                AxelSpire-owned CI CMK that encrypts this
-                                customer's state bucket and DynamoDB lock
-                                table. DynamoDB rejects cross-account
-                                alias ARNs at CreateTable, so the key
-                                must be pre-provisioned by AxelSpire and
-                                its real ARN supplied here. Required for
-                                'apply' unless --skip-bootstrap is set.
+                                Override the AxelSpire-owned CI CMK ARN.
+                                Default: alias-form ARN derived from
+                                --axelspire-ci-region,
+                                --axelspire-ci-account-id, and
+                                --customer-id:
+                                arn:<partition>:kms:<ci-region>:<ci-acct>:alias/3am-ci/<customer-id>
+                                Supply an explicit value only for Path B
+                                (recovery / pre-provisioned key with a
+                                non-default alias).
   --axelspire-artifact-s3-bucket-arn ARN
                                 Override the deterministic
                                 arn:aws:s3:::3am-ci-artifacts-<ci-acct>
@@ -1200,14 +1201,9 @@ do_apply () {
   if ! ${SKIP_ORG} && ! ${EXTERNAL_IDP}; then
     [ -n "$BREAKGLASS_USER" ] || die "--breakglass-user required (or pass --external-idp / --skip-org)"
   fi
-  # The AxelSpire CI CMK encrypts both the customer state bucket and
-  # the DynamoDB lock table. DynamoDB rejects cross-account alias
-  # ARNs at CreateTable, so the real key ARN must be supplied. Bail
-  # out before any AWS write if Phase 5 is in scope and the flag is
-  # missing.
-  if ! ${SKIP_BOOTSTRAP} && [ -z "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" ]; then
-    die "--axelspire-artifact-kms-key-arn is required for 'apply' (Phase 5 encrypts the state bucket and lock table with AxelSpire's CI CMK; DynamoDB requires the real key ARN, not an alias ARN). Coordinate with AxelSpire to obtain the per-customer CI CMK ARN, or pass --skip-bootstrap to run Phase 0 only."
-  fi
+  # The AxelSpire CI CMK ARN defaults to the deterministic alias form
+  # (see phase5_compute_axelspire_arns) when --axelspire-artifact-kms-key-arn
+  # is not supplied. Override only for Path B / non-default alias.
 
   preflight
   resolve_apply_defaults
