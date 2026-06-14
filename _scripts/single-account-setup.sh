@@ -641,49 +641,67 @@ phase5_write_policy_files () {
   if ${REQUIRE_LICENSE_SESSION_TAG}; then
     lic_block=$'\n        ,"StringEquals_LicenseTag": {"aws:RequestTag/LicenseValid": "true"}'
   fi
-  # We can't compose two StringEquals blocks safely as JSON; build the
-  # Condition with jq if available, otherwise hand-build.
+  # Trust policy is split into two statements. sts:RoleSessionName and
+  # sts:ExternalId are not valid context keys for sts:TagSession, so a
+  # single combined statement would fail the condition check on every
+  # TagSession call from a 3am-* session. The AssumeRole statement
+  # carries the session-name / external-id gates; the TagSession
+  # statement carries only the aws:RequestTag/LicenseValid gate.
   log "writing ${TRUST_POLICY_FILE}"
   if command -v jq >/dev/null 2>&1; then
-    local conds='{"StringLike":{"sts:RoleSessionName":["3am-*","tg-*"]}}'
-    [ -n "${external_id}" ] && conds=$(echo "${conds}" | jq --arg eid "${external_id}" \
+    local assume_conds='{"StringLike":{"sts:RoleSessionName":["3am-*","tg-*"]}}'
+    [ -n "${external_id}" ] && assume_conds=$(echo "${assume_conds}" | jq --arg eid "${external_id}" \
                                           '. + {StringEquals: {"sts:ExternalId": $eid}}')
+    local tag_conds='{}'
     if ${REQUIRE_LICENSE_SESSION_TAG}; then
-      # If StringEquals already set (external_id), merge LicenseValid in.
-      if echo "${conds}" | jq -e '.StringEquals' >/dev/null 2>&1; then
-        conds=$(echo "${conds}" | jq '.StringEquals += {"aws:RequestTag/LicenseValid": "true"}')
-      else
-        conds=$(echo "${conds}" | jq '. + {StringEquals: {"aws:RequestTag/LicenseValid": "true"}}')
-      fi
+      tag_conds='{"StringEquals":{"aws:RequestTag/LicenseValid":"true"}}'
     fi
     jq -n \
       --arg principal "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_ROLE_NAME}" \
-      --argjson conds "${conds}" \
+      --argjson assume_conds "${assume_conds}" \
+      --argjson tag_conds "${tag_conds}" \
       '{
         Version: "2012-10-17",
-        Statement: [{
-          Sid: "AllowAxelspireCIAssumeRole",
-          Effect: "Allow",
-          Principal: { AWS: $principal },
-          Action: ["sts:AssumeRole","sts:TagSession"],
-          Condition: $conds
-        }]
+        Statement: [
+          {
+            Sid: "AllowAxelspireCIAssumeRole",
+            Effect: "Allow",
+            Principal: { AWS: $principal },
+            Action: "sts:AssumeRole",
+            Condition: $assume_conds
+          },
+          ({
+            Sid: "AllowAxelspireCITagSession",
+            Effect: "Allow",
+            Principal: { AWS: $principal },
+            Action: "sts:TagSession"
+          } + (if ($tag_conds | length) > 0 then {Condition: $tag_conds} else {} end))
+        ]
       }' > "${TRUST_POLICY_FILE}"
   else
-    # Minimal fallback: emit just the StringLike condition. Operators
-    # without jq lose external-id / LicenseValid enforcement in the
-    # trust policy file; the SSM mirror still records the configured
-    # values for the operator to apply manually.
+    # Minimal fallback: emit just the StringLike condition on AssumeRole
+    # and an unconditional TagSession. Operators without jq lose
+    # external-id / LicenseValid enforcement in the trust policy file;
+    # the SSM mirror still records the configured values for the
+    # operator to apply manually.
     cat > "${TRUST_POLICY_FILE}" <<EOF
 {
   "Version": "2012-10-17",
-  "Statement": [{
-    "Sid": "AllowAxelspireCIAssumeRole",
-    "Effect": "Allow",
-    "Principal": { "AWS": "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_ROLE_NAME}" },
-    "Action": ["sts:AssumeRole","sts:TagSession"],
-    "Condition": { "StringLike": { "sts:RoleSessionName": ["3am-*","tg-*"] } }
-  }]
+  "Statement": [
+    {
+      "Sid": "AllowAxelspireCIAssumeRole",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_ROLE_NAME}" },
+      "Action": "sts:AssumeRole",
+      "Condition": { "StringLike": { "sts:RoleSessionName": ["3am-*","tg-*"] } }
+    },
+    {
+      "Sid": "AllowAxelspireCITagSession",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_ROLE_NAME}" },
+      "Action": "sts:TagSession"
+    }
+  ]
 }
 EOF
   fi

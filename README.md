@@ -630,23 +630,37 @@ backend exist.
 cat > /tmp/trust-policy.json <<EOF
 {
   "Version": "2012-10-17",
-  "Statement": [{
-    "Sid": "AllowAxelspireCIAssumeRole",
-    "Effect": "Allow",
-    "Principal": {
-      "AWS": "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_ROLE_NAME}"
-    },
-    "Action": ["sts:AssumeRole", "sts:TagSession"],
-    "Condition": {
-      "StringLike": {
-        "sts:RoleSessionName": ["3am-*", "tg-*"]
+  "Statement": [
+    {
+      "Sid": "AllowAxelspireCIAssumeRole",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_ROLE_NAME}"
       },
-      "StringEquals": {
-        "sts:ExternalId":                    "$(aws secretsmanager get-secret-value --secret-id "$EXTERNAL_ID_SECRET_ARN" --query SecretString --output text)",
-        "aws:RequestTag/LicenseValid":       "true"
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringLike": {
+          "sts:RoleSessionName": ["3am-*", "tg-*"]
+        },
+        "StringEquals": {
+          "sts:ExternalId": "$(aws secretsmanager get-secret-value --secret-id "$EXTERNAL_ID_SECRET_ARN" --query SecretString --output text)"
+        }
+      }
+    },
+    {
+      "Sid": "AllowAxelspireCITagSession",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_ROLE_NAME}"
+      },
+      "Action": "sts:TagSession",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/LicenseValid": "true"
+        }
       }
     }
-  }]
+  ]
 }
 EOF
 
@@ -661,11 +675,20 @@ export DEPLOYMENT_ROLE_ARN=$(aws iam get-role \
   --role-name ThreeAM-Deployment --query Role.Arn --output text)
 ```
 
-> If the customer's policy does **not** require the `LicenseValid` session
-> tag, remove the `aws:RequestTag/LicenseValid` line from the Condition
-> block. Likewise, omit the `sts:ExternalId` line if no external ID is in
-> use. This mirrors the `require_license_session_tag` and
-> `external_id_secret_arn` variables in `deploy/variables.tf`.
+> The trust policy is split into two statements on purpose.
+> `sts:RoleSessionName` and `sts:ExternalId` are not valid context keys
+> for `sts:TagSession`, so a single combined statement would silently
+> fail the condition check on every `TagSession` call and break the
+> CI backend's session-tag handshake. Keep `sts:AssumeRole` and
+> `sts:TagSession` in separate statements.
+>
+> If the customer's policy does **not** require the `LicenseValid`
+> session tag, drop the `Condition` block from the
+> `AllowAxelspireCITagSession` statement entirely. Likewise, omit the
+> `sts:ExternalId` entry from the `AllowAxelspireCIAssumeRole`
+> condition if no external ID is in use. This mirrors the
+> `require_license_session_tag` and `external_id_secret_arn` variables
+> in `deploy/variables.tf`.
 
 ### B.3 — create the customer-managed CMK and alias
 
