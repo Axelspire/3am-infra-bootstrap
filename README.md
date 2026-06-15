@@ -1200,6 +1200,12 @@ omits `sts:TagSession`. The deploy chain in
              "kms:ResourceAliases": "alias/3am-ci/*"
            }
          }
+       },
+       {
+         "Sid": "ReadCustomerExternalId",
+         "Effect": "Allow",
+         "Action": "secretsmanager:GetSecretValue",
+         "Resource": "arn:aws:secretsmanager:*:033113129683:secret:/3am/license/external-id/*"
        }
      ]
    }
@@ -1217,7 +1223,7 @@ aws iam list-role-policies --role-name GitHubActions-CustomerDeploy
 
 Expect `arn:aws:iam::033113129683:role/GitHubActions-CustomerDeploy`
 and `customer-deploy-permissions` in the inline policies list. To
-confirm all five statement Sids are present:
+confirm all six statement Sids are present:
 
 ```sh
 aws iam get-role-policy \
@@ -1225,7 +1231,8 @@ aws iam get-role-policy \
   --policy-name customer-deploy-permissions \
   --query 'PolicyDocument.Statement[].Sid'
 # expect: ["AssumeCustomerDeploymentRole","TagCustomerDeploymentSession",
-#          "ReadWriteCustomerState","LockCustomerState","UseAxelspireCiKeys"]
+#          "ReadWriteCustomerState","LockCustomerState","UseAxelspireCiKeys",
+#          "ReadCustomerExternalId"]
 ```
 
 Customer-side `apply` runs can now proceed.
