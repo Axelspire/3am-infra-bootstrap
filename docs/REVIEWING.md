@@ -39,13 +39,25 @@ After this module is applied, AxelSpire holds:
 
 ## 2. Trust policy walkthrough
 
-The role has a single trust statement with up to four conditions:
+The role has two trust statements, split by action because
+`sts:RoleSessionName` and `sts:ExternalId` are not valid context keys
+for `sts:TagSession` and would silently fail the condition check on
+every `TagSession` call from a 3am-* session.
+
+`AllowAxelspireCIAssumeRole` — `sts:AssumeRole` with up to three
+conditions:
 
 | Condition | Effect | Notes |
 |---|---|---|
 | `aws:PrincipalArn = arn:aws:iam::<CI-account>:role/<CI-role>` | Only that specific role can assume. | Hard-coded by `axelspire_ci_account_id` + `axelspire_ci_role_name` inputs. |
 | `sts:RoleSessionName LIKE 3am-* OR tg-*` | Sessions must self-identify. | Visible in CloudTrail as `userIdentity.sessionContext.sessionIssuer.arn` + `requestParameters.roleSessionName`. |
 | `sts:ExternalId = <secret value>` | (Optional) Re-asserts customer control. | Customer rotates the value in Secrets Manager; AxelSpire is given the new value out-of-band. Re-apply this module to roll. |
+
+`AllowAxelspireCITagSession` — `sts:TagSession` with one optional
+condition:
+
+| Condition | Effect | Notes |
+|---|---|---|
 | `aws:RequestTag/LicenseValid = true` | (Optional) AxelSpire CI must attach a session tag declaring license validity. | Enforced at the AssumeRole call; tampering with the tag is visible in CloudTrail. |
 
 ## 3. Permission policy walkthrough

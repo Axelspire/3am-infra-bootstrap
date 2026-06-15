@@ -73,21 +73,22 @@ module — see [Security model](#security-model) and
 > AxelSpire environments. See
 > [Troubleshooting → Invalid principal in policy](#troubleshooting).
 
-> **Prerequisite — AxelSpire CI CMK key ARN.** Phase 5 encrypts the
-> customer's Terraform state bucket and DynamoDB lock table with the
-> AxelSpire-owned per-customer CI CMK (this is the kill-switch the
-> platform relies on: when AxelSpire disables the CMK at license end,
-> state and locks become unreadable). DynamoDB rejects cross-account
-> KMS **alias** ARNs at `CreateTable`, so the **real key ARN** must be
-> supplied on the CLI via `--axelspire-artifact-kms-key-arn`. AxelSpire
-> pre-provisions one CMK per customer (alias
+> **Prerequisite — AxelSpire CI CMK.** Phase 5 encrypts the customer's
+> Terraform state bucket and DynamoDB lock table with the AxelSpire-owned
+> per-customer CI CMK (this is the kill-switch the platform relies on:
+> when AxelSpire disables the CMK at license end, state and locks become
+> unreadable). AxelSpire pre-provisions one CMK per customer with alias
 > `alias/3am-ci/<customer-id>` in account `033113129683`,
-> region `eu-west-1`) and sends the real key ARN to the customer over
-> the agreed secure channel before bootstrap. See
+> region `eu-west-1`. The script derives the alias-form ARN
+> automatically from `--customer-id`, so **no flag is required** in the
+> standard flow — the CMK simply has to exist in the AxelSpire CI
+> account before you run `apply`. Override the default with
+> `--axelspire-artifact-kms-key-arn <arn>` only for recovery or
+> non-default alias scenarios. See
 > [Appendix D](#appendix-d--axelspire-ci-cmk-informational) for the
 > exact console steps AxelSpire follows and
 > [Troubleshooting → Invalid arn (DynamoDB CreateTable)](#troubleshooting)
-> for the corresponding error if the flag is missing or wrong.
+> for the corresponding error if the CMK is missing.
 
 ```sh
 # Multi-account (creates a new child account in a 3AM OU)
@@ -98,8 +99,7 @@ chmod +x customer-org-setup.sh
   --account-email aws-3am@acme.example.com \
   --platform-admin-user alice@acme.example.com \
   --breakglass-user bob@acme.example.com \
-  --allowed-regions "eu-west-1,us-east-1" \
-  --axelspire-artifact-kms-key-arn "arn:aws:kms:eu-west-1:033113129683:key/<uuid-supplied-by-axelspire>"
+  --allowed-regions "eu-west-1,us-east-1"
 ./customer-org-setup.sh outputs-json > org-setup.json
 
 # Single-account (use the current account as the 3AM workload)
@@ -110,8 +110,7 @@ curl -fsSLO https://raw.githubusercontent.com/Axelspire/3am-infra-bootstrap/main
 chmod +x single-account-setup.sh
 ./single-account-setup.sh apply \
   --breakglass-user bob@acme.example.com \
-  --allowed-regions "eu-west-1,us-east-1" \
-  --axelspire-artifact-kms-key-arn "arn:aws:kms:eu-west-1:033113129683:key/<uuid-supplied-by-axelspire>"
+  --allowed-regions "eu-west-1,us-east-1"
 ./single-account-setup.sh outputs-json > org-setup.json
 ```
 
@@ -332,40 +331,24 @@ To resolve:
    in the output JSON, so the hand-off to AxelSpire stays
    self-describing.
 
-**`--axelspire-artifact-kms-key-arn is required for 'apply' …`**
-
-The script refused to start because Phase 5 is in scope (no
-`--skip-bootstrap`) and no real key ARN was supplied. The deterministic
-`alias/3am-ci/<customer-id>` form is **not** sufficient: DynamoDB
-`CreateTable` rejects cross-account KMS alias ARNs (alias names are
-only resolvable in their home account), so the actual key ARN —
-including the UUID — must be passed on the CLI.
-
-To resolve, request the per-customer CI CMK key ARN from AxelSpire
-over the agreed secure channel. The expected shape is
-`arn:aws:kms:eu-west-1:033113129683:key/<uuid>`. The console steps
-AxelSpire follows to provision the key are in
-[Appendix D](#appendix-d--axelspire-ci-cmk-informational); customers
-do not run those steps themselves.
-
-**`An error occurred (ValidationException) when calling the CreateTable operation: KMS validation error: …NotFoundException: Invalid arn …`**
+**`An error occurred (ValidationException) when calling the CreateTable operation: KMS validation error: …NotFoundException: …`**
 
 The script attempted to encrypt the DynamoDB lock table with a KMS
-ARN that DynamoDB cannot resolve. Almost always one of:
+ARN that AWS cannot resolve. Almost always one of:
 
-- the `--axelspire-artifact-kms-key-arn` value points at a key UUID
-  that does not exist in the AxelSpire CI account (typo, wrong
-  environment, key was rotated), **or**
-- the script was built before the `--axelspire-artifact-kms-key-arn`
-  flag existed and is falling back to the alias ARN — re-download
-  the latest script with `curl -fsSLO` and re-run.
+- the per-customer CI CMK has not been provisioned yet in the
+  AxelSpire CI account — confirm with AxelSpire that
+  `alias/3am-ci/<customer-id>` exists and is enabled in
+  `033113129683 / eu-west-1`, **or**
+- an explicit `--axelspire-artifact-kms-key-arn` override was passed
+  and points at a key/alias that does not exist (typo, wrong
+  environment, key was rotated).
 
-To resolve, confirm the ARN with AxelSpire (see
-[Appendix D](#appendix-d--axelspire-ci-cmk-informational) for the
-exact shape and how AxelSpire produces it) and re-run the same
-`apply` command with the corrected value. Phase 0 and any Phase 5
-work completed before the failure (IAM role, customer CMK,
-external-ID secret, state bucket creation) is idempotently reused.
+To resolve, confirm the CMK is in place (see
+[Appendix D](#appendix-d--axelspire-ci-cmk-informational)) and re-run
+the same `apply`. Phase 0 and any Phase 5 work completed before the
+failure (IAM role, customer CMK, external-ID secret, state bucket
+creation) is idempotently reused.
 
 ---
 
@@ -647,23 +630,37 @@ backend exist.
 cat > /tmp/trust-policy.json <<EOF
 {
   "Version": "2012-10-17",
-  "Statement": [{
-    "Sid": "AllowAxelspireCIAssumeRole",
-    "Effect": "Allow",
-    "Principal": {
-      "AWS": "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_ROLE_NAME}"
-    },
-    "Action": ["sts:AssumeRole", "sts:TagSession"],
-    "Condition": {
-      "StringLike": {
-        "sts:RoleSessionName": ["3am-*", "tg-*"]
+  "Statement": [
+    {
+      "Sid": "AllowAxelspireCIAssumeRole",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_ROLE_NAME}"
       },
-      "StringEquals": {
-        "sts:ExternalId":                    "$(aws secretsmanager get-secret-value --secret-id "$EXTERNAL_ID_SECRET_ARN" --query SecretString --output text)",
-        "aws:RequestTag/LicenseValid":       "true"
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringLike": {
+          "sts:RoleSessionName": ["3am-*", "tg-*"]
+        },
+        "StringEquals": {
+          "sts:ExternalId": "$(aws secretsmanager get-secret-value --secret-id "$EXTERNAL_ID_SECRET_ARN" --query SecretString --output text)"
+        }
+      }
+    },
+    {
+      "Sid": "AllowAxelspireCITagSession",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_ROLE_NAME}"
+      },
+      "Action": "sts:TagSession",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/LicenseValid": "true"
+        }
       }
     }
-  }]
+  ]
 }
 EOF
 
@@ -678,11 +675,20 @@ export DEPLOYMENT_ROLE_ARN=$(aws iam get-role \
   --role-name ThreeAM-Deployment --query Role.Arn --output text)
 ```
 
-> If the customer's policy does **not** require the `LicenseValid` session
-> tag, remove the `aws:RequestTag/LicenseValid` line from the Condition
-> block. Likewise, omit the `sts:ExternalId` line if no external ID is in
-> use. This mirrors the `require_license_session_tag` and
-> `external_id_secret_arn` variables in `deploy/variables.tf`.
+> The trust policy is split into two statements on purpose.
+> `sts:RoleSessionName` and `sts:ExternalId` are not valid context keys
+> for `sts:TagSession`, so a single combined statement would silently
+> fail the condition check on every `TagSession` call and break the
+> CI backend's session-tag handshake. Keep `sts:AssumeRole` and
+> `sts:TagSession` in separate statements.
+>
+> If the customer's policy does **not** require the `LicenseValid`
+> session tag, drop the `Condition` block from the
+> `AllowAxelspireCITagSession` statement entirely. Likewise, omit the
+> `sts:ExternalId` entry from the `AllowAxelspireCIAssumeRole`
+> condition if no external ID is in use. This mirrors the
+> `require_license_session_tag` and `external_id_secret_arn` variables
+> in `deploy/variables.tf`.
 
 ### B.3 — create the customer-managed CMK and alias
 
@@ -1141,11 +1147,22 @@ omits `sts:TagSession`. The deploy chain in
        {
          "Sid": "AssumeCustomerDeploymentRole",
          "Effect": "Allow",
-         "Action": ["sts:AssumeRole", "sts:TagSession"],
+         "Action": "sts:AssumeRole",
          "Resource": "arn:aws:iam::*:role/ThreeAM-Deployment",
          "Condition": {
            "StringLike": {
              "sts:RoleSessionName": ["tg-*", "3am-*"]
+           }
+         }
+       },
+       {
+         "Sid": "TagCustomerDeploymentSession",
+         "Effect": "Allow",
+         "Action": "sts:TagSession",
+         "Resource": "arn:aws:iam::*:role/ThreeAM-Deployment",
+         "Condition": {
+           "StringEquals": {
+             "aws:RequestTag/LicenseValid": "true"
            }
          }
        },
@@ -1199,7 +1216,18 @@ aws iam list-role-policies --role-name GitHubActions-CustomerDeploy
 ```
 
 Expect `arn:aws:iam::033113129683:role/GitHubActions-CustomerDeploy`
-and `customer-deploy-permissions` in the inline policies list.
+and `customer-deploy-permissions` in the inline policies list. To
+confirm all five statement Sids are present:
+
+```sh
+aws iam get-role-policy \
+  --role-name GitHubActions-CustomerDeploy \
+  --policy-name customer-deploy-permissions \
+  --query 'PolicyDocument.Statement[].Sid'
+# expect: ["AssumeCustomerDeploymentRole","TagCustomerDeploymentSession",
+#          "ReadWriteCustomerState","LockCustomerState","UseAxelspireCiKeys"]
+```
+
 Customer-side `apply` runs can now proceed.
 
 ### What customers should verify on their side
@@ -1224,12 +1252,12 @@ locked out within seconds.
 This appendix documents the one-time, AxelSpire-side console
 walkthrough used to provision a per-customer CI CMK in the AxelSpire
 CI account (`033113129683`, region `eu-west-1`). The customer-side
-bootstrap script then receives the **real key ARN** of this CMK via
-`--axelspire-artifact-kms-key-arn` and uses it to encrypt the
-customer's Terraform state bucket and DynamoDB lock table. The CMK
-is the platform's kill-switch: disabling or scheduling deletion of
-this CMK at license end makes the customer's state unreadable and
-halts all `3am-deployments` runs against that customer.
+bootstrap script references this CMK via its deterministic alias
+(`alias/3am-ci/<customer-id>`) and uses it to encrypt the customer's
+Terraform state bucket and DynamoDB lock table. The CMK is the
+platform's kill-switch: disabling or scheduling deletion of this CMK
+at license end makes the customer's state unreadable and halts all
+`3am-deployments` runs against that customer.
 
 It is **not** something customers run — it is published here so
 customers can audit the key's policy and confirm the kill-switch
@@ -1362,18 +1390,21 @@ encrypted resources are ever created from the AxelSpire side, so
 grant-management permission would be unused and would weaken the
 boundary.
 
-### Step 3 — Capture the real key ARN
+### Step 3 — Confirm the alias is in place
 
-After the key is created, copy the **Key ARN** (not the alias ARN)
-from the key details page. It looks like:
+The customer-side bootstrap script references the key via its
+deterministic alias (`alias/3am-ci/<customer-id>`), so no value
+needs to be sent to the customer in the standard flow — confirming
+existence is enough. For audit, recovery, or non-default-alias
+scenarios, copy the **Key ARN** from the key details page; it looks
+like:
 
 ```
 arn:aws:kms:eu-west-1:033113129683:key/12345678-1234-1234-1234-123456789012
 ```
 
-Send this value to the customer over the agreed secure channel.
-They paste it into the bootstrap command as
-`--axelspire-artifact-kms-key-arn <value>`.
+A customer can pass either form to the bootstrap script as an
+override via `--axelspire-artifact-kms-key-arn <value>`.
 
 ### Step 4 — Verify
 

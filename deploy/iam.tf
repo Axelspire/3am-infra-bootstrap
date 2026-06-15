@@ -29,10 +29,14 @@ resource "aws_iam_role_policy" "three_am_deployment" {
 # ------------------------------------------------------------------ #
 
 data "aws_iam_policy_document" "deployment_trust" {
+  # AssumeRole branch. Conditions sts:RoleSessionName and sts:ExternalId
+  # are valid for AssumeRole-family actions only; keeping them in this
+  # statement means a TagSession-action evaluation does not inherit them
+  # and fail on missing keys.
   statement {
     sid     = "AllowAxelspireCIAssumeRole"
     effect  = "Allow"
-    actions = ["sts:AssumeRole", "sts:TagSession"]
+    actions = ["sts:AssumeRole"]
 
     principals {
       type        = "AWS"
@@ -52,6 +56,20 @@ data "aws_iam_policy_document" "deployment_trust" {
         variable = "sts:ExternalId"
         values   = [local.external_id_value]
       }
+    }
+  }
+
+  # TagSession branch. sts:RoleSessionName and sts:ExternalId are not
+  # valid context keys for sts:TagSession; only aws:RequestTag
+  # conditions apply, which is what the license gate needs.
+  statement {
+    sid     = "AllowAxelspireCITagSession"
+    effect  = "Allow"
+    actions = ["sts:TagSession"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:${local.partition}:iam::${var.axelspire_ci_account_id}:role/${var.axelspire_ci_role_name}"]
     }
 
     dynamic "condition" {
