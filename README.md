@@ -347,22 +347,22 @@ To resolve:
 
 **`An error occurred (ValidationException) when calling the CreateTable operation: KMS validation error: …NotFoundException: …`**
 
-The script attempted to encrypt the DynamoDB lock table with a KMS
-ARN that AWS cannot resolve. Almost always one of:
+The script attempted to encrypt the DynamoDB lock table with the
+customer CMK and DynamoDB could not validate the key. Almost always
+one of:
 
-- the per-customer CI CMK has not been replicated yet into the
-  customer's deployment region — confirm with AxelSpire that
-  `alias/3am-ci/<customer-id>` exists and is enabled in
-  `033113129683 / <deployment-region>` (the MRK replica), **or**
-- `--axelspire-artifact-kms-key-arn` points at a key/alias that does
-  not exist (typo, wrong region, key rotated/destroyed), **or**
-- `--axelspire-artifact-kms-key-arn` was passed as an alias ARN: the
-  script rejects alias ARNs because IAM `Resource` matching does not
-  authorize via aliases and DynamoDB SSE-KMS requires a same-region
-  key — pass the key-ID ARN instead.
+- the customer CMK (`alias/3am-customer-cmk`) was deleted or disabled
+  between phase 5 step 1 (CMK creation) and step 5 (lock table
+  creation) — re-run `apply` to recreate, or
+- the script is being run against a partially-cleaned account where
+  the alias points at a `PendingDeletion` key — cancel the deletion
+  or rotate to a fresh key id, or
+- `AWS_REGION` was pivoted away from `DEPLOYMENT_REGION` between
+  steps (only possible with local script edits).
 
-To resolve, confirm the CMK is in place (see
-[Appendix D](#appendix-d--axelspire-ci-cmk-informational)) and re-run
+To resolve, verify the customer CMK is enabled with
+`aws kms describe-key --key-id alias/3am-customer-cmk --region
+<deployment-region>` and re-run
 the same `apply`. Phase 0 and any Phase 5 work completed before the
 failure (IAM role, customer CMK, external-ID secret, state bucket
 creation) is idempotently reused.
@@ -473,7 +473,7 @@ not a runner of this module.
 | IAM role policies | `ThreeAM-Deployment-Permissions{,-Ec2,-Extra}` | Customer | Narrow allow-list scoped by ARN prefix `3am-*` and resource tag `Service=3am`. |
 | Secrets Manager secret | `/3am/license/external-id` | Customer | 32-byte hex external ID used in the deployment role trust policy. |
 | S3 bucket | `3am-state-<account>-<region>` | Customer | Terraform state for every 3AM stack. Versioned, TLS-only, **SSE-KMS using the AxelSpire CI CMK** (kill-switch). |
-| DynamoDB table | `3am-state-lock` | Customer | Terraform state locking. PITR enabled, **SSE-KMS using the AxelSpire CI CMK** (kill-switch). |
+| DynamoDB table | `3am-state-lock` | Customer | Terraform state locking. PITR enabled, **SSE-KMS using the customer CMK** (the table holds only lock IDs and digests; state contents stay in S3 under the CI CMK). |
 | SSM parameters | `/3am/{kms,state,iam,bootstrap,axelspire}/...` | Customer | Runtime discovery of the above by downstream stacks. |
 | _(reference only)_ KMS key | `alias/3am-ci/<customer-id>` | **AxelSpire CI** | Encrypts customer state + Lambda artifacts. Disabled by AxelSpire at license end to render state and code unreadable without touching customer-owned resources. |
 | _(reference only)_ S3 bucket | `3am-ci-artifacts-<ci-account>` | **AxelSpire CI** | Shared bucket (single-region, in the CI primary region) holding encrypted Lambda code zips for all enrolled customers. |
@@ -842,7 +842,7 @@ aws dynamodb create-table \
   --billing-mode PAY_PER_REQUEST \
   --attribute-definitions AttributeName=LockID,AttributeType=S \
   --key-schema           AttributeName=LockID,KeyType=HASH \
-  --sse-specification    "Enabled=true,SSEType=KMS,KMSMasterKeyId=${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" \
+  --sse-specification    "Enabled=true,SSEType=KMS,KMSMasterKeyId=${KMS_KEY_ARN}" \
   --tags "$(echo "$COMMON_TAGS_JSON" | jq -c '.')"
 
 aws dynamodb wait table-exists --table-name 3am-state-lock
@@ -1300,8 +1300,11 @@ Each customer gets one logical CMK in the AxelSpire CI account
 
 Both primary and replicas share key material and the same alias
 name `alias/3am-ci/<customer-id>` in their respective regions.
-Replicas are required because DynamoDB SSE-KMS demands a same-region
-customer-managed key for the customer's lock table.
+Replicas are required because the customer's state bucket uses
+SSE-KMS with this key and S3 demands a same-region key for every
+object PUT, and because the `ThreeAM-Deployment` inline policy
+references the deployment-region key-ID ARN by `Resource` (IAM
+`Resource` matching does not follow MRK aliases across regions).
 
 ### Step 1 — Apply the Terragrunt leaves
 
@@ -1412,11 +1415,15 @@ done
 
 Each region's primary/replica must be disabled individually — MRK
 replicas share key material but each has its own enable/disable
-state. Effect: every subsequent S3 `GetObject` / `PutObject` and
-every DynamoDB `GetItem` / `PutItem` against the customer's state
-bucket and lock table fails with `KMSDisabledException`. All
-`3am-deployments` Terraform plans / applies for that customer
-abort immediately. Re-enable each region's key to resume.
+state. Effect: every subsequent S3 `GetObject` / `PutObject`
+against the customer's state bucket fails with
+`KMSDisabledException`, and every Lambda invocation that reads
+encrypted artifacts from `3am-ci-artifacts-<ci-account>` fails the
+same way. All `3am-deployments` Terraform plans / applies for that
+customer abort immediately when they try to read state. The lock
+table is encrypted under the customer CMK, so it remains readable
+— but with state unreadable, Terraform never reaches the lock
+step. Re-enable each region's key to resume.
 
 To permanently terminate, schedule deletion of every replica
 first, then the primary. AWS will not destroy the primary's

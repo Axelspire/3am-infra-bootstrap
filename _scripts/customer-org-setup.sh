@@ -1212,16 +1212,22 @@ phase5_get_or_create_state_bucket () {
 }
 
 phase5_get_or_create_lock_table () {
+  # The lock table holds only Terraform lock IDs and digests (no state
+  # contents), so encrypting it under the customer CMK is sufficient and
+  # avoids requiring the bootstrap caller (OrganizationAccountAccessRole)
+  # to be authorized on the AxelSpire CI CMK. State objects in S3 remain
+  # encrypted under AXELSPIRE_ARTIFACT_KMS_KEY_ARN, which is what carries
+  # the "destroy-key-to-revoke-state" property.
   if aws dynamodb describe-table --table-name "${STATE_LOCK_TABLE_NAME}" >/dev/null 2>&1; then
     log "reusing lock table ${STATE_LOCK_TABLE_NAME}"
   else
-    log "creating lock table ${STATE_LOCK_TABLE_NAME} (PAY_PER_REQUEST, SSE-KMS, PITR)"
+    log "creating lock table ${STATE_LOCK_TABLE_NAME} (PAY_PER_REQUEST, SSE-KMS=customer CMK, PITR)"
     aws dynamodb create-table \
       --table-name "${STATE_LOCK_TABLE_NAME}" \
       --billing-mode PAY_PER_REQUEST \
       --attribute-definitions AttributeName=LockID,AttributeType=S \
       --key-schema AttributeName=LockID,KeyType=HASH \
-      --sse-specification "Enabled=true,SSEType=KMS,KMSMasterKeyId=${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" \
+      --sse-specification "Enabled=true,SSEType=KMS,KMSMasterKeyId=${CUSTOMER_CMK_ARN}" \
       --tags "Key=Service,Value=3am" "Key=CustomerId,Value=${CUSTOMER_ID}" \
              "Key=ManagedBy,Value=customer-org-setup.sh" \
              "Key=BootstrapVersion,Value=${BOOTSTRAP_VERSION}" >/dev/null

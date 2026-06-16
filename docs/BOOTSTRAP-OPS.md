@@ -213,7 +213,33 @@ Org-management account):
   --axelspire-artifact-kms-key-arn arn:aws:kms:us-east-1:033113129683:key/<uuid>
 ```
 
-`--axelspire-artifact-kms-key-arn` is required (§3.4 / §5).
+The `--axelspire-artifact-kms-key-arn` value comes from AxelSpire (the
+key-ID ARN of the customer-region MRK replica; see §3.4). The script
+rejects alias ARNs and ARNs whose region does not equal the customer's
+deployment region.
+
+The apply is idempotent and resumable: every step is "list → create if
+missing → reuse". A partial failure can be cleared by fixing the cause
+and re-running the same command. See `--help` for every flag.
+
+Unlike `customer-org-setup.sh`, no child account is created, so there
+is no Organizations tag to anchor `outputs-json` recovery on. The
+script reads the AxelSpire CI CMK ARN back from the
+`/3am/axelspire/artifact-kms-key-arn` SSM parameter written during
+Phase 5, but the `customer_id` slug is *not* persisted to AWS — pass
+`--customer-id` (or `--customer-name`, from which the slug is
+re-derived) on `outputs-json` invocations in a fresh shell, and point
+`AWS_REGION` at the deployment region.
+
+Capture the output JSON to a stable path:
+
+```bash
+./single-account-setup.sh outputs-json --customer-id acme-corp \
+  > "$HOME/3am-single-account-setup-outputs.json"
+```
+
+`outputs-json` re-resolves every field against live AWS state and is
+safe to run any number of times.
 
 Differences from `customer-org-setup.sh` worth knowing:
 
@@ -223,6 +249,7 @@ Differences from `customer-org-setup.sh` worth knowing:
 | `--skip-org` | Phase 0 (SCPs / Identity Center) is skipped; useful when re-running just Phase 5 in an already-configured account. |
 | Output filename | `3am-single-account-setup-outputs.json` instead of `3am-org-setup-outputs.json`. |
 | JSON schema | Identical to the multi-account schema (same `phase0` / `phase5` shape) — see `README.md → The output JSON`. The deployments side does not need to know which variant produced the file. |
+| `outputs-json` recovery | Reads `/3am/*` SSM parameters in the deployment region rather than Organizations account tags; set `AWS_REGION=<deployment-region>` before invoking from a fresh shell. |
 
 ---
 
