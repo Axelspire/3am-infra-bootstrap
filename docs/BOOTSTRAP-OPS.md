@@ -92,13 +92,15 @@ Before running, collect from the customer (intake form §1, §3):
 | `--breakglass-user` | Intake §3 break-glass contact email |
 | `--allowed-regions` | Intake §3 primary region + any pre-approved secondaries |
 
-The CI CMK ARN is **not** an intake-form input. The script derives the
-deterministic alias-form ARN
-(`arn:aws:kms:<ci-region>:<ci-acct>:alias/3am-ci/<customer-id>`) from
-the AxelSpire CI defaults baked into the script plus `--customer-id`.
-The `--axelspire-artifact-kms-key-arn` flag is an override, used only
-for **Path B** (the customer pre-provisioned the key under a different
-alias via Appendix D).
+The CI CMK ARN is **not** an intake-form input — it comes from AxelSpire
+out-of-band, *after* the customer-onboard PR has merged and
+`platform-deploy.yml` has applied the per-customer `customer-ci-key`
+primary and `customer-ci-key-replica` leaves. `--axelspire-artifact-kms-key-arn`
+is **required** on every `apply`: it must be the key-ID ARN
+(`arn:<partition>:kms:<region>:<ci-acct>:key/<uuid>`, never an alias
+ARN) of the MRK *replica* whose region equals the customer's deployment
+region. The script enforces both rules; the customer cannot proceed
+without an AxelSpire-issued value.
 
 ---
 
@@ -149,15 +151,14 @@ Standard apply, customer-Org-management context:
   --account-email aws-3am@acme.example.com \
   --platform-admin-user alice@acme.example.com \
   --breakglass-user bob@acme.example.com \
-  --allowed-regions eu-west-1,us-east-1
+  --allowed-regions eu-west-1,us-east-1 \
+  --axelspire-artifact-kms-key-arn arn:aws:kms:us-east-1:033113129683:key/<uuid>
 ```
 
-For **Path B** (customer pre-provisioned the CI CMK under a non-default
-alias) append:
-
-```bash
-  --axelspire-artifact-kms-key-arn arn:aws:kms:eu-west-1:033113129683:alias/<custom-alias>
-```
+The `--axelspire-artifact-kms-key-arn` value comes from AxelSpire (the
+key-ID ARN of the customer-region MRK replica; see §3.4). The script
+rejects alias ARNs and ARNs whose region does not equal the customer's
+deployment region.
 
 The apply is idempotent and resumable: every step is "list → create if
 missing → reuse". A partial failure can be cleared by fixing the cause
@@ -190,12 +191,11 @@ Org-management account):
   --customer-id acme-corp \
   --platform-admin-user alice@acme.example.com \
   --breakglass-user bob@acme.example.com \
-  --allowed-regions eu-west-1,us-east-1
+  --allowed-regions eu-west-1,us-east-1 \
+  --axelspire-artifact-kms-key-arn arn:aws:kms:us-east-1:033113129683:key/<uuid>
 ```
 
-Same Path B override applies as for `customer-org-setup.sh` — append
-`--axelspire-artifact-kms-key-arn` when the alias was pre-provisioned
-under a non-default name.
+`--axelspire-artifact-kms-key-arn` is required (§3.4 / §5).
 
 Differences from `customer-org-setup.sh` worth knowing:
 
@@ -274,7 +274,7 @@ key leaf.
 | `.account_id` | `aws_account_id` workflow input → `customer.hcl.aws_account_id` | `customer-onboard.yml` |
 | `.region` | `initial_region` workflow input → leaf region dir | `customer-onboard.yml` |
 | `.phase0.customer_admin_role_arns` | `customer_admin_roles` CSV input → `customer.hcl` | `customer-onboard.yml` |
-| `.phase5.axelspire_artifact_kms_key_arn` | **[Path B only]** import target for `customer-ci-key` | `CUSTOMER-ONBOARDING-OPS.md §6` |
+| `.phase5.axelspire_artifact_kms_key_arn` | Audit echo — must equal the value AxelSpire issued (replica leaf's `terragrunt output kms_key_arn`) | `CUSTOMER-ONBOARDING-OPS.md §3` |
 | Everything else (`.phase5.deployment_role_arn`, `.phase5.state_bucket_name`, …) | Informational — written inline to DynamoDB attribute `bootstrap_json` for audit/recovery | `customer-intake-write.sh --from-org-setup` |
 
 The remaining three scaffold inputs (`vpc_cidr`, `license_tier`,

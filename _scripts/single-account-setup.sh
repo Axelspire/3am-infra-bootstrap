@@ -167,21 +167,24 @@ Optional:
 
 Phase 5 tuning (defaults are correct for the standard AxelSpire setup):
   --axelspire-ci-account-id ID  Default: 033113129683.
-  --axelspire-ci-region REGION  Default: eu-west-1. Used to derive the
-                                AxelSpire CI artifacts bucket ARN
-                                deterministically and as a documentation
-                                hint for the alias ARN.
+  --axelspire-ci-region REGION  Default: eu-west-1. Documentation hint
+                                only; the AxelSpire CI artifacts bucket
+                                lives in the CI account and is region-
+                                less in its ARN.
   --axelspire-ci-role-name NAME Default: GitHubActions-CustomerDeploy.
   --axelspire-artifact-kms-key-arn ARN
-                                Override the AxelSpire-owned CI CMK ARN.
-                                Default: alias-form ARN derived from
-                                --axelspire-ci-region,
-                                --axelspire-ci-account-id, and
-                                --customer-id:
-                                arn:<partition>:kms:<ci-region>:<ci-acct>:alias/3am-ci/<customer-id>
-                                Supply an explicit value only for Path B
-                                (recovery / pre-provisioned key with a
-                                non-default alias).
+                                Key-ID ARN of the customer-region MRK
+                                replica of the per-customer AxelSpire CI
+                                CMK. Required. Must be of the form
+                                arn:<partition>:kms:<region>:<ci-acct>:key/<uuid>
+                                (alias ARNs are rejected: IAM Resource
+                                matching does not authorize via aliases),
+                                and the region must equal the customer's
+                                deployment region (DynamoDB SSE-KMS
+                                requires a same-region key). Obtain by
+                                running `terragrunt output kms_key_arn`
+                                on the customer-ci-key-replica leaf for
+                                this customer/region pair.
   --axelspire-artifact-s3-bucket-arn ARN
                                 Override the deterministic
                                 arn:aws:s3:::3am-ci-artifacts-<ci-acct>
@@ -612,15 +615,28 @@ resolve_apply_defaults () {
 }
 
 # Derive the AxelSpire-side ARNs. The S3 bucket ARN follows a
-# deterministic naming convention. The KMS value falls back to a
-# documentation-only alias ARN — DynamoDB CreateTable will reject
-# cross-account alias ARNs, so 'apply' requires the operator to
-# pass the real key ARN via --axelspire-artifact-kms-key-arn.
-# CLI-supplied values (set by parse_args) are preserved.
+# deterministic naming convention. The KMS value must be the customer-
+# region MRK replica's key-ID ARN: alias ARNs do not authorize IAM
+# Resource matching, and DynamoDB CreateTable requires a same-region
+# customer-managed key.
+phase5_validate_axelspire_kms_arn () {
+  # Strict validation runs only on apply: outputs / outputs-json paths
+  # may recover the ARN from SSM (see resolve_outputs), so an empty
+  # value at this point is not fatal.
+  [ "${COMMAND}" = "apply" ] || return 0
+  [ -n "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" ] \
+    || die "--axelspire-artifact-kms-key-arn is required (key-ID ARN of the customer-region MRK replica; see --help)"
+  echo "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" \
+    | grep -qE "^arn:[^:]+:kms:[^:]+:[0-9]{12}:key/[0-9a-f-]+$" \
+    || die "--axelspire-artifact-kms-key-arn must be a key-ID ARN (arn:...:kms:<region>:<account>:key/<uuid>), not an alias ARN: ${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"
+  local key_region
+  key_region=$(echo "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" | awk -F: '{print $4}')
+  [ "${key_region}" = "${EFFECTIVE_REGION}" ] \
+    || die "--axelspire-artifact-kms-key-arn region '${key_region}' must equal the customer deployment region '${EFFECTIVE_REGION}' (DynamoDB SSE-KMS requires a same-region key)"
+}
+
 phase5_compute_axelspire_arns () {
-  if [ -z "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" ]; then
-    AXELSPIRE_ARTIFACT_KMS_KEY_ARN="arn:${PARTITION}:kms:${AXELSPIRE_CI_REGION}:${AXELSPIRE_CI_ACCOUNT_ID}:alias/3am-ci/${CUSTOMER_ID}"
-  fi
+  phase5_validate_axelspire_kms_arn
   if [ -z "${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}" ]; then
     AXELSPIRE_ARTIFACT_S3_BUCKET_ARN="arn:${PARTITION}:s3:::3am-ci-artifacts-${AXELSPIRE_CI_ACCOUNT_ID}"
   fi
@@ -1097,7 +1113,7 @@ phase5_put_ssm_params () {
   _put_ssm /3am/state/bucket-name     "Name of the S3 bucket holding Terraform state." "${STATE_BUCKET_NAME}"
   _put_ssm /3am/state/lock-table-name "Name of the DynamoDB state-lock table." "${STATE_LOCK_TABLE_NAME}"
   _put_ssm /3am/iam/deployment-role-arn "ARN of the ${DEPLOYMENT_ROLE_NAME} role." "${DEPLOYMENT_ROLE_ARN}"
-  _put_ssm /3am/axelspire/artifact-kms-key-arn   "ARN (or alias ARN) of the AxelSpire-owned CI CMK." "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"
+  _put_ssm /3am/axelspire/artifact-kms-key-arn   "Key-ID ARN of the customer-region MRK replica of the AxelSpire-owned CI CMK." "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"
   _put_ssm /3am/axelspire/artifact-s3-bucket-arn "ARN of the AxelSpire CI artifacts S3 bucket." "${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}"
   _put_ssm /3am/bootstrap/version     "Version of the bootstrap that was last applied." "${BOOTSTRAP_VERSION}"
   _put_ssm /3am/bootstrap/applied-at  "Timestamp of the last apply of the bootstrap." "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -1219,9 +1235,8 @@ do_apply () {
   if ! ${SKIP_ORG} && ! ${EXTERNAL_IDP}; then
     [ -n "$BREAKGLASS_USER" ] || die "--breakglass-user required (or pass --external-idp / --skip-org)"
   fi
-  # The AxelSpire CI CMK ARN defaults to the deterministic alias form
-  # (see phase5_compute_axelspire_arns) when --axelspire-artifact-kms-key-arn
-  # is not supplied. Override only for Path B / non-default alias.
+  # --axelspire-artifact-kms-key-arn is required on apply (key-ID ARN of
+  # the customer-region MRK replica; see phase5_validate_axelspire_kms_arn).
 
   preflight
   resolve_apply_defaults
@@ -1372,6 +1387,15 @@ resolve_outputs () {
                             --secret-id "${EXTERNAL_ID_SECRET_NAME}" \
                             --query 'ARN' --output text 2>/dev/null || echo "")
   [ "$EXTERNAL_ID_SECRET_ARN" = "None" ] && EXTERNAL_ID_SECRET_ARN=""
+  # Recover the AxelSpire CI CMK ARN from the SSM parameter written by
+  # phase5_apply, so 'outputs' / 'outputs-json' invocations in a fresh
+  # shell (no --axelspire-artifact-kms-key-arn) can still report it.
+  if [ -z "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" ]; then
+    AXELSPIRE_ARTIFACT_KMS_KEY_ARN=$(aws ssm get-parameter \
+                                      --name /3am/axelspire/artifact-kms-key-arn \
+                                      --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+    [ "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" = "None" ] && AXELSPIRE_ARTIFACT_KMS_KEY_ARN=""
+  fi
   STATE_BUCKET_NAME="3am-state-${ACCOUNT_ID}-${EFFECTIVE_REGION}"
   aws s3api head-bucket --bucket "${STATE_BUCKET_NAME}" 2>/dev/null || STATE_BUCKET_NAME=""
 }
@@ -1556,4 +1580,6 @@ main () {
   esac
 }
 
-main "$@"
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi
