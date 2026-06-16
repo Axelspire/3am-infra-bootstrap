@@ -69,15 +69,32 @@ The script itself runs ideally in **AWS CloudShell** from the customer's
 Org-management account — that side-steps every tooling and credential
 concern in one go.
 
-### 3.3 SSO home region gotcha
+### 3.3 SSO home region vs. deployment region
 
-Identity Center is a **single-region** service. The Org may have it
-enabled in any region (often `us-east-1`); all `sso-admin:*` calls
-must target that region regardless of where the customer's workload
-will live. The script reads `AWS_REGION` for AWS calls but auto-probes
-for the Identity Center region; if Identity Center is enabled in a
-region other than `AWS_REGION`, the script errors with a clear
-message telling you to re-run with the right region.
+Identity Center is a **single-region** service: an Org has exactly one
+IDC home region (often `us-east-1`), set when IDC was first enabled
+and effectively immutable. All `sso-admin:*` / `identitystore:*` calls
+must target that region. The customer's workload (state bucket, lock
+table, customer CMK, external-ID secret) lives in the **deployment
+region**, which may differ.
+
+The script decouples these:
+
+- `AWS_REGION` (or `AWS_DEFAULT_REGION` / `aws configure get region`)
+  selects the **IDC / Organizations** region. Set it to the IDC home
+  region; if IDC is enabled elsewhere, preflight fails with a clear
+  message telling you which region to re-run from.
+- `--deployment-region <region>` selects the **workload** region. It
+  defaults to `AWS_REGION` (single-region orgs need not pass it). It
+  must appear in `--allowed-regions`. The KMS ARN passed via
+  `--axelspire-artifact-kms-key-arn` must be the same-region MRK leaf;
+  preflight enforces the region match.
+
+`customer-org-setup.sh` additionally pivots `AWS_REGION` to the
+deployment region after assuming into the child account, so all
+Phase 5 AWS CLI calls (KMS, Secrets Manager, S3, DynamoDB, SSM)
+target the right regional endpoint regardless of where IDC lives.
+`single-account-setup.sh` performs the same pivot around Phase 5.
 
 ### 3.4 Inputs from the intake form
 
@@ -91,6 +108,7 @@ Before running, collect from the customer (intake form §1, §3):
 | `--platform-admin-user` | Intake §3 technical contact email (or designated platform admin) |
 | `--breakglass-user` | Intake §3 break-glass contact email |
 | `--allowed-regions` | Intake §3 primary region + any pre-approved secondaries |
+| `--deployment-region` *(optional)* | Intake §3 primary deployment region — pass only when it differs from the IDC home region the script's `AWS_REGION` points at |
 
 The CI CMK ARN is **not** an intake-form input — it comes from AxelSpire
 out-of-band, *after* the customer-onboard PR has merged and

@@ -3,7 +3,7 @@
 #
 # The validation gates --axelspire-artifact-kms-key-arn on `apply`: the
 # value must be a key-ID ARN (not an alias ARN), and its region must
-# equal EFFECTIVE_REGION (DynamoDB SSE-KMS requires a same-region key).
+# equal DEPLOYMENT_REGION (DynamoDB SSE-KMS requires a same-region key).
 #
 # Sources the script under a BASH_SOURCE guard so main() is not invoked,
 # then exercises the function in subshells with curated globals. The
@@ -36,7 +36,7 @@ run_validate () {
   (
     set +e
     COMMAND="${cmd}"
-    EFFECTIVE_REGION="${region}"
+    DEPLOYMENT_REGION="${region}"
     AXELSPIRE_ARTIFACT_KMS_KEY_ARN="${arn}"
     phase5_validate_axelspire_kms_arn 2>/dev/null
   )
@@ -62,18 +62,24 @@ expect_reject "apply rejects empty ARN" apply eu-west-1 ""
 echo "== Apply: ARN shape =="
 expect_reject "apply rejects alias ARN" \
   apply us-east-1 "arn:aws:kms:us-east-1:033113129683:alias/3am-ci/acme"
+expect_reject "apply rejects bare key id (no arn: prefix)" \
+  apply us-east-1 "mrk-7b53fb1ed2ce4389b989b29d2ed2ec4b"
+expect_reject "apply rejects bare UUID (no arn: prefix)" \
+  apply us-east-1 "00000000-0000-0000-0000-000000000000"
 expect_reject "apply rejects key/<id> with extra path segment" \
   apply us-east-1 "arn:aws:kms:us-east-1:033113129683:key/abc/extra"
 expect_reject "apply rejects non-kms ARN" \
   apply us-east-1 "arn:aws:s3:::3am-ci-artifacts-033113129683"
 expect_reject "apply rejects malformed ARN (missing partition)" \
   apply us-east-1 "arn::kms:us-east-1:033113129683:key/00000000-0000-0000-0000-000000000000"
-expect_accept "apply accepts well-formed key-ID ARN (aws partition)" \
+expect_accept "apply accepts well-formed key-ID ARN (aws partition, UUID)" \
   apply us-east-1 "arn:aws:kms:us-east-1:033113129683:key/00000000-0000-0000-0000-000000000000"
-expect_accept "apply accepts well-formed key-ID ARN (aws-cn partition)" \
+expect_accept "apply accepts well-formed key-ID ARN (aws-cn partition, UUID)" \
   apply cn-north-1 "arn:aws-cn:kms:cn-north-1:033113129683:key/abcdef12-3456-7890-abcd-ef1234567890"
+expect_accept "apply accepts well-formed MRK key-ID ARN" \
+  apply eu-west-1 "arn:aws:kms:eu-west-1:033113129683:key/mrk-7b53fb1ed2ce4389b989b29d2ed2ec4b"
 
-echo "== Apply: region must match EFFECTIVE_REGION =="
+echo "== Apply: region must match DEPLOYMENT_REGION =="
 expect_reject "apply rejects mismatched region (primary vs deployment)" \
   apply us-east-1 "arn:aws:kms:eu-west-1:033113129683:key/00000000-0000-0000-0000-000000000000"
 expect_reject "apply rejects mismatched region (different replica)" \

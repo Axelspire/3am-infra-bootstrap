@@ -73,6 +73,7 @@ ROOT_ID=""
 ACCOUNT_ID=""
 PARTITION=""
 EFFECTIVE_REGION=""
+DEPLOYMENT_REGION=""
 REGION_POLICY_ID=""
 ROOT_POLICY_ID=""
 PS_PLATFORM_ARN=""
@@ -153,6 +154,16 @@ Auto-derived from the calling AWS account when omitted:
 Optional:
   --allowed-regions LIST        CSV, default: "eu-west-1,us-east-1".
                                 Used to parameterise the region-deny SCP.
+  --deployment-region REGION    Customer workload region: where the state
+                                bucket, DynamoDB lock table, customer CMK
+                                and external-ID secret live, and which
+                                the --axelspire-artifact-kms-key-arn must
+                                match. Default: the shell's AWS_REGION
+                                (which also drives Identity Center calls).
+                                Set this explicitly when the IAM Identity
+                                Center home region differs from the
+                                customer's deployment region (IDC is
+                                one-per-org). Must be in --allowed-regions.
   --platform-admins-group NAME  Default: "3AM-Platform-Admins".
   --breakglass-group NAME       Default: "3AM-BreakGlass".
   --external-idp                Skip user/group creation; expect them to
@@ -235,6 +246,7 @@ parse_args () {
       --customer-name)             CUSTOMER_NAME="$2"; shift 2 ;;
       --customer-id)               CUSTOMER_ID="$2"; shift 2 ;;
       --allowed-regions)           ALLOWED_REGIONS_CSV="$2"; shift 2 ;;
+      --deployment-region)         DEPLOYMENT_REGION="$2"; shift 2 ;;
       --platform-admin-user)       PLATFORM_ADMIN_USER="$2"; shift 2 ;;
       --breakglass-user)           BREAKGLASS_USER="$2"; shift 2 ;;
       --platform-admins-group)     PLATFORM_ADMINS_GROUP="$2"; shift 2 ;;
@@ -275,7 +287,23 @@ preflight () {
 
   EFFECTIVE_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-$(aws configure get region 2>/dev/null || true)}}"
   [ -n "$EFFECTIVE_REGION" ] || EFFECTIVE_REGION="<unset>"
-  log "preflight: effective region = ${EFFECTIVE_REGION} (regional APIs e.g. sso-admin target this region)"
+  log "preflight: effective region = ${EFFECTIVE_REGION} (Identity Center / Organizations APIs target this region)"
+
+  # DEPLOYMENT_REGION drives the customer workload: state bucket, lock
+  # table, customer CMK, external-ID secret, kms:ViaService in the CMK
+  # policy, and the region match for --axelspire-artifact-kms-key-arn.
+  # Defaults to EFFECTIVE_REGION; set --deployment-region explicitly when
+  # the IDC home region differs from where the customer should deploy.
+  if [ -z "${DEPLOYMENT_REGION}" ]; then
+    DEPLOYMENT_REGION="${EFFECTIVE_REGION}"
+  fi
+  [ "${DEPLOYMENT_REGION}" != "<unset>" ] && [ -n "${DEPLOYMENT_REGION}" ] \
+    || die "deployment region is unset: pass --deployment-region or export AWS_REGION"
+  log "preflight: deployment region = ${DEPLOYMENT_REGION} (state bucket, lock table, customer CMK live here)"
+  case ",${ALLOWED_REGIONS_CSV}," in
+    *,"${DEPLOYMENT_REGION}",*) : ;;
+    *) die "deployment region '${DEPLOYMENT_REGION}' is not in --allowed-regions '${ALLOWED_REGIONS_CSV}' (the 3am-region-deny SCP would block it)" ;;
+  esac
 
   if ${SKIP_ORG}; then
     log "preflight: --skip-org set, skipping Org / Identity Center checks"
@@ -626,13 +654,15 @@ phase5_validate_axelspire_kms_arn () {
   [ "${COMMAND}" = "apply" ] || return 0
   [ -n "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" ] \
     || die "--axelspire-artifact-kms-key-arn is required (key-ID ARN of the customer-region MRK replica; see --help)"
+  # MRK key IDs are 'mrk-<32 hex chars>'; single-region CMK key IDs are
+  # UUIDs. Both terminate the ARN: nothing after the key id.
   echo "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" \
-    | grep -qE "^arn:[^:]+:kms:[^:]+:[0-9]{12}:key/[0-9a-f-]+$" \
-    || die "--axelspire-artifact-kms-key-arn must be a key-ID ARN (arn:...:kms:<region>:<account>:key/<uuid>), not an alias ARN: ${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"
+    | grep -qE "^arn:[^:]+:kms:[^:]+:[0-9]{12}:key/(mrk-)?[0-9a-f-]+$" \
+    || die "--axelspire-artifact-kms-key-arn must be a key-ID ARN of the form arn:<partition>:kms:<region>:<account>:key/<key-id> (MRK key IDs are 'mrk-<32 hex>'); alias ARNs and bare key IDs are not accepted. Got: ${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"
   local key_region
   key_region=$(echo "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" | awk -F: '{print $4}')
-  [ "${key_region}" = "${EFFECTIVE_REGION}" ] \
-    || die "--axelspire-artifact-kms-key-arn region '${key_region}' must equal the customer deployment region '${EFFECTIVE_REGION}' (DynamoDB SSE-KMS requires a same-region key)"
+  [ "${key_region}" = "${DEPLOYMENT_REGION}" ] \
+    || die "--axelspire-artifact-kms-key-arn region '${key_region}' must equal the customer deployment region '${DEPLOYMENT_REGION}' (DynamoDB SSE-KMS requires a same-region key). Pass the customer-region MRK replica's key-ID ARN, or set --deployment-region to match the ARN."
 }
 
 phase5_compute_axelspire_arns () {
@@ -847,7 +877,7 @@ EOF
       "Resource": "*",
       "Condition": {
         "StringEquals": {
-          "kms:ViaService": "lambda.${EFFECTIVE_REGION}.amazonaws.com",
+          "kms:ViaService": "lambda.${DEPLOYMENT_REGION}.amazonaws.com",
           "kms:CallerAccount": "${ACCOUNT_ID}"
         }
       } }
@@ -881,7 +911,7 @@ EOF
       "Resource": "*",
       "Condition": {
         "StringEquals": {
-          "kms:ViaService": "lambda.${EFFECTIVE_REGION}.amazonaws.com",
+          "kms:ViaService": "lambda.${DEPLOYMENT_REGION}.amazonaws.com",
           "kms:CallerAccount": "${ACCOUNT_ID}"
         }
       } }
@@ -1044,16 +1074,16 @@ phase5_read_external_id_value () {
 }
 
 phase5_get_or_create_state_bucket () {
-  STATE_BUCKET_NAME="3am-state-${ACCOUNT_ID}-${EFFECTIVE_REGION}"
-  if aws s3api head-bucket --bucket "${STATE_BUCKET_NAME}" 2>/dev/null; then
+  STATE_BUCKET_NAME="3am-state-${ACCOUNT_ID}-${DEPLOYMENT_REGION}"
+  if aws s3api head-bucket --bucket "${STATE_BUCKET_NAME}" --region "${DEPLOYMENT_REGION}" 2>/dev/null; then
     log "reusing state bucket ${STATE_BUCKET_NAME}"
   else
     log "creating state bucket ${STATE_BUCKET_NAME}"
-    if [ "${EFFECTIVE_REGION}" = "us-east-1" ]; then
-      aws s3api create-bucket --bucket "${STATE_BUCKET_NAME}" >/dev/null
+    if [ "${DEPLOYMENT_REGION}" = "us-east-1" ]; then
+      aws s3api create-bucket --bucket "${STATE_BUCKET_NAME}" --region "${DEPLOYMENT_REGION}" >/dev/null
     else
-      aws s3api create-bucket --bucket "${STATE_BUCKET_NAME}" \
-        --create-bucket-configuration "LocationConstraint=${EFFECTIVE_REGION}" >/dev/null
+      aws s3api create-bucket --bucket "${STATE_BUCKET_NAME}" --region "${DEPLOYMENT_REGION}" \
+        --create-bucket-configuration "LocationConstraint=${DEPLOYMENT_REGION}" >/dev/null
     fi
   fi
 
@@ -1120,15 +1150,27 @@ phase5_put_ssm_params () {
 }
 
 # Main Phase 5 entry-point. Assumes preflight has resolved ACCOUNT_ID,
-# PARTITION, EFFECTIVE_REGION and (for the CMK admin statement) the
-# AWSReservedSSO role ARNs.
+# PARTITION, EFFECTIVE_REGION, DEPLOYMENT_REGION and (for the CMK admin
+# statement) the AWSReservedSSO role ARNs. AWS_REGION is pivoted to
+# DEPLOYMENT_REGION for the duration of phase 5 so all regional AWS CLI
+# calls (kms, secretsmanager, s3, dynamodb, ssm) target the deployment
+# region, even when it differs from the Identity Center home region.
 phase5_apply () {
   phase5_compute_axelspire_arns
 
   log "Phase 5: AxelSpire artifact KMS key = ${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"
   log "Phase 5: AxelSpire artifact S3 bucket = ${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}"
 
-  STATE_BUCKET_NAME="3am-state-${ACCOUNT_ID}-${EFFECTIVE_REGION}"
+  local _saved_region _saved_region_set
+  if [ -n "${AWS_REGION+x}" ]; then
+    _saved_region="${AWS_REGION}"; _saved_region_set=true
+  else
+    _saved_region=""; _saved_region_set=false
+  fi
+  export AWS_REGION="${DEPLOYMENT_REGION}"
+  log "Phase 5: AWS_REGION pinned to ${DEPLOYMENT_REGION} (deployment region)"
+
+  STATE_BUCKET_NAME="3am-state-${ACCOUNT_ID}-${DEPLOYMENT_REGION}"
 
   # Step 1: KMS CMK (needed by Secrets Manager for the external-ID
   # secret and referenced by the inline role policy).
@@ -1224,6 +1266,13 @@ EOF
 
   log "== Phase 5 step 6/6: SSM parameters =="
   phase5_put_ssm_params
+
+  if ${_saved_region_set}; then
+    export AWS_REGION="${_saved_region}"
+  else
+    unset AWS_REGION
+  fi
+  log "Phase 5: AWS_REGION restored (now operating in ${AWS_REGION:-<unset>})"
 }
 
 
@@ -1245,7 +1294,8 @@ do_apply () {
   say "Customer:           ${CUSTOMER_NAME}"
   say "Customer ID slug:   ${CUSTOMER_ID}"
   say "Target account:     ${ACCOUNT_ID} (current caller — used as workload account)"
-  say "Effective region:   ${EFFECTIVE_REGION}"
+  say "Effective region:   ${EFFECTIVE_REGION} (IDC / Organizations)"
+  say "Deployment region:  ${DEPLOYMENT_REGION} (state bucket, lock table, CMK)"
   say "Allowed regions:    ${ALLOWED_REGIONS_CSV}"
   say "Identity Center:    ${INSTANCE_ARN:-<n/a — skip-org>}"
   say "Platform admin:     ${PLATFORM_ADMIN_USER:-<external IdP / skip-org>}"
@@ -1369,6 +1419,11 @@ resolve_outputs () {
   PARTITION=$(aws sts get-caller-identity --query Arn --output text 2>/dev/null | cut -d: -f2)
   [ -n "$PARTITION" ] || PARTITION="aws"
   EFFECTIVE_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-$(aws configure get region 2>/dev/null || true)}}"
+  # If --deployment-region was not passed, default to EFFECTIVE_REGION so
+  # the bucket / KMS / Secrets lookups below target the right region. The
+  # single-account variant has no child-account tag to recover from, so a
+  # mismatched shell region with no flag will simply look in the wrong place.
+  [ -n "${DEPLOYMENT_REGION}" ] || DEPLOYMENT_REGION="${EFFECTIVE_REGION}"
   if [ -z "$CUSTOMER_ID" ] && [ -n "$CUSTOMER_NAME" ]; then
     CUSTOMER_ID=$(printf '%s' "${CUSTOMER_NAME}" \
                     | tr '[:upper:]' '[:lower:]' \
@@ -1378,13 +1433,16 @@ resolve_outputs () {
   DEPLOYMENT_ROLE_ARN=$(aws iam get-role --role-name "${DEPLOYMENT_ROLE_NAME}" \
                           --query 'Role.Arn' --output text 2>/dev/null || echo "")
   CUSTOMER_CMK_KEY_ID=$(aws kms describe-key --key-id "${CUSTOMER_CMK_ALIAS}" \
+                          --region "${DEPLOYMENT_REGION}" \
                           --query 'KeyMetadata.KeyId' --output text 2>/dev/null || echo "")
   if [ -n "$CUSTOMER_CMK_KEY_ID" ] && [ "$CUSTOMER_CMK_KEY_ID" != "None" ]; then
     CUSTOMER_CMK_ARN=$(aws kms describe-key --key-id "${CUSTOMER_CMK_KEY_ID}" \
+                         --region "${DEPLOYMENT_REGION}" \
                          --query 'KeyMetadata.Arn' --output text 2>/dev/null || echo "")
   fi
   EXTERNAL_ID_SECRET_ARN=$(aws secretsmanager describe-secret \
                             --secret-id "${EXTERNAL_ID_SECRET_NAME}" \
+                            --region "${DEPLOYMENT_REGION}" \
                             --query 'ARN' --output text 2>/dev/null || echo "")
   [ "$EXTERNAL_ID_SECRET_ARN" = "None" ] && EXTERNAL_ID_SECRET_ARN=""
   # Recover the AxelSpire CI CMK ARN from the SSM parameter written by
@@ -1393,11 +1451,12 @@ resolve_outputs () {
   if [ -z "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" ]; then
     AXELSPIRE_ARTIFACT_KMS_KEY_ARN=$(aws ssm get-parameter \
                                       --name /3am/axelspire/artifact-kms-key-arn \
+                                      --region "${DEPLOYMENT_REGION}" \
                                       --query 'Parameter.Value' --output text 2>/dev/null || echo "")
     [ "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" = "None" ] && AXELSPIRE_ARTIFACT_KMS_KEY_ARN=""
   fi
-  STATE_BUCKET_NAME="3am-state-${ACCOUNT_ID}-${EFFECTIVE_REGION}"
-  aws s3api head-bucket --bucket "${STATE_BUCKET_NAME}" 2>/dev/null || STATE_BUCKET_NAME=""
+  STATE_BUCKET_NAME="3am-state-${ACCOUNT_ID}-${DEPLOYMENT_REGION}"
+  aws s3api head-bucket --bucket "${STATE_BUCKET_NAME}" --region "${DEPLOYMENT_REGION}" 2>/dev/null || STATE_BUCKET_NAME=""
 }
 
 print_outputs_human () {
@@ -1409,7 +1468,8 @@ print_outputs_human () {
   customer_name                       : ${CUSTOMER_NAME:-<unknown>}
   customer_id                         : ${CUSTOMER_ID:-<unknown>}
   account_id                          : ${ACCOUNT_ID:-<missing>}
-  region                              : ${EFFECTIVE_REGION:-<missing>}
+  region                              : ${DEPLOYMENT_REGION:-<missing>}
+  idc_region                          : ${EFFECTIVE_REGION:-<missing>}
   partition                           : ${PARTITION:-<missing>}
 
   Phase 0 (Identity Center / SCPs):
@@ -1448,7 +1508,9 @@ print_outputs_json () {
       --arg customer_name              "${CUSTOMER_NAME}" \
       --arg customer_id                "${CUSTOMER_ID}" \
       --arg account_id                 "${ACCOUNT_ID}" \
-      --arg region                     "${EFFECTIVE_REGION}" \
+      --arg region                     "${DEPLOYMENT_REGION}" \
+      --arg deployment_region          "${DEPLOYMENT_REGION}" \
+      --arg idc_region                 "${EFFECTIVE_REGION}" \
       --arg partition                  "${PARTITION}" \
       --arg instance_arn               "${INSTANCE_ARN}" \
       --arg identity_store_id          "${IDSTORE_ID}" \
@@ -1481,6 +1543,8 @@ print_outputs_json () {
         customer_id: $customer_id,
         account_id: $account_id,
         region: $region,
+        deployment_region: $deployment_region,
+        idc_region: $idc_region,
         partition: $partition,
         phase0: {
           identity_center_instance_arn: $instance_arn,
@@ -1520,7 +1584,9 @@ print_outputs_json () {
     printf '  "customer_name": "%s",\n'                       "${CUSTOMER_NAME}"
     printf '  "customer_id": "%s",\n'                         "${CUSTOMER_ID}"
     printf '  "account_id": "%s",\n'                          "${ACCOUNT_ID}"
-    printf '  "region": "%s",\n'                              "${EFFECTIVE_REGION}"
+    printf '  "region": "%s",\n'                              "${DEPLOYMENT_REGION}"
+    printf '  "deployment_region": "%s",\n'                   "${DEPLOYMENT_REGION}"
+    printf '  "idc_region": "%s",\n'                          "${EFFECTIVE_REGION}"
     printf '  "partition": "%s",\n'                           "${PARTITION}"
     printf '  "identity_center_instance_arn": "%s",\n'        "${INSTANCE_ARN}"
     printf '  "identity_store_id": "%s",\n'                   "${IDSTORE_ID}"
