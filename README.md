@@ -77,16 +77,17 @@ module — see [Security model](#security-model) and
 > Terraform state bucket and DynamoDB lock table with the AxelSpire-owned
 > per-customer CI CMK (this is the kill-switch the platform relies on:
 > when AxelSpire disables the CMK at license end, state and locks become
-> unreadable). AxelSpire pre-provisions one CMK per customer with alias
-> `alias/3am-ci/<customer-id>` in account `033113129683`,
-> region `eu-west-1`. The script derives the alias-form ARN
-> automatically from `--customer-id`, so **no flag is required** in the
-> standard flow — the CMK simply has to exist in the AxelSpire CI
-> account before you run `apply`. Override the default with
-> `--axelspire-artifact-kms-key-arn <arn>` only for recovery or
-> non-default alias scenarios. See
+> unreadable). The CMK is a multi-region key (MRK) with primary in
+> `eu-west-1` and a replica in every customer deployment region; both
+> carry the alias `alias/3am-ci/<customer-id>` in account `033113129683`.
+> Pass `--axelspire-artifact-kms-key-arn <key-id-arn>` pointing at the
+> **same-region replica's key-ID ARN** (alias ARNs are rejected — IAM
+> `Resource` matching does not authorize via aliases, and DynamoDB
+> SSE-KMS requires a same-region key). Obtain the value by running
+> `terragrunt output kms_key_arn` on the `customer-ci-key-replica` leaf
+> for this customer/region. See
 > [Appendix D](#appendix-d--axelspire-ci-cmk-informational) for the
-> exact console steps AxelSpire follows and
+> CMK topology and key-policy AxelSpire ships, and
 > [Troubleshooting → Invalid arn (DynamoDB CreateTable)](#troubleshooting)
 > for the corresponding error if the CMK is missing.
 
@@ -188,7 +189,7 @@ two nested objects — `phase0` (Identity Center / SCPs) and `phase5`
     "axelspire_ci_account_id": "033113129683",
     "axelspire_ci_region":     "eu-west-1",
     "axelspire_ci_role_name":  "GitHubActions-CustomerDeploy",
-    "axelspire_artifact_kms_key_arn":   "arn:aws:kms:eu-west-1:033113129683:alias/3am-ci/acme-corp",
+    "axelspire_artifact_kms_key_arn":   "arn:aws:kms:eu-west-1:033113129683:key/11111111-2222-3333-4444-555555555555",
     "axelspire_artifact_s3_bucket_arn": "arn:aws:s3:::3am-ci-artifacts-033113129683"
   }
 }
@@ -336,13 +337,16 @@ To resolve:
 The script attempted to encrypt the DynamoDB lock table with a KMS
 ARN that AWS cannot resolve. Almost always one of:
 
-- the per-customer CI CMK has not been provisioned yet in the
-  AxelSpire CI account — confirm with AxelSpire that
+- the per-customer CI CMK has not been replicated yet into the
+  customer's deployment region — confirm with AxelSpire that
   `alias/3am-ci/<customer-id>` exists and is enabled in
-  `033113129683 / eu-west-1`, **or**
-- an explicit `--axelspire-artifact-kms-key-arn` override was passed
-  and points at a key/alias that does not exist (typo, wrong
-  environment, key was rotated).
+  `033113129683 / <deployment-region>` (the MRK replica), **or**
+- `--axelspire-artifact-kms-key-arn` points at a key/alias that does
+  not exist (typo, wrong region, key rotated/destroyed), **or**
+- `--axelspire-artifact-kms-key-arn` was passed as an alias ARN: the
+  script rejects alias ARNs because IAM `Resource` matching does not
+  authorize via aliases and DynamoDB SSE-KMS requires a same-region
+  key — pass the key-ID ARN instead.
 
 To resolve, confirm the CMK is in place (see
 [Appendix D](#appendix-d--axelspire-ci-cmk-informational)) and re-run
@@ -555,7 +559,7 @@ customer_admin_role_arns         = [
   "arn:aws:iam::123456789012:role/PlatformAdmin",
   "arn:aws:iam::123456789012:role/BreakGlass",
 ]
-axelspire_artifact_kms_key_arn   = "arn:aws:kms:eu-west-1:033113129683:alias/3am-ci/acme-corp"
+axelspire_artifact_kms_key_arn   = "arn:aws:kms:eu-west-1:033113129683:key/11111111-2222-3333-4444-555555555555"
 axelspire_artifact_s3_bucket_arn = "arn:aws:s3:::3am-ci-artifacts-033113129683"
 ```
 
@@ -1200,6 +1204,12 @@ omits `sts:TagSession`. The deploy chain in
              "kms:ResourceAliases": "alias/3am-ci/*"
            }
          }
+       },
+       {
+         "Sid": "ReadCustomerExternalId",
+         "Effect": "Allow",
+         "Action": "secretsmanager:GetSecretValue",
+         "Resource": "arn:aws:secretsmanager:*:033113129683:secret:/3am/license/external-id/*"
        }
      ]
    }
@@ -1217,7 +1227,7 @@ aws iam list-role-policies --role-name GitHubActions-CustomerDeploy
 
 Expect `arn:aws:iam::033113129683:role/GitHubActions-CustomerDeploy`
 and `customer-deploy-permissions` in the inline policies list. To
-confirm all five statement Sids are present:
+confirm all six statement Sids are present:
 
 ```sh
 aws iam get-role-policy \
@@ -1225,7 +1235,8 @@ aws iam get-role-policy \
   --policy-name customer-deploy-permissions \
   --query 'PolicyDocument.Statement[].Sid'
 # expect: ["AssumeCustomerDeploymentRole","TagCustomerDeploymentSession",
-#          "ReadWriteCustomerState","LockCustomerState","UseAxelspireCiKeys"]
+#          "ReadWriteCustomerState","LockCustomerState","UseAxelspireCiKeys",
+#          "ReadCustomerExternalId"]
 ```
 
 Customer-side `apply` runs can now proceed.
@@ -1249,198 +1260,170 @@ locked out within seconds.
 
 ## Appendix D — AxelSpire CI CMK (informational)
 
-This appendix documents the one-time, AxelSpire-side console
-walkthrough used to provision a per-customer CI CMK in the AxelSpire
-CI account (`033113129683`, region `eu-west-1`). The customer-side
-bootstrap script references this CMK via its deterministic alias
-(`alias/3am-ci/<customer-id>`) and uses it to encrypt the customer's
-Terraform state bucket and DynamoDB lock table. The CMK is the
-platform's kill-switch: disabling or scheduling deletion of this CMK
-at license end makes the customer's state unreadable and halts all
+This appendix documents the per-customer CI CMK that the AxelSpire
+customer-deploy pipeline uses to encrypt the customer's Terraform
+state bucket and DynamoDB lock table. The CMK is the platform's
+kill-switch: disabling or scheduling deletion of this key at license
+end makes the customer's state unreadable and halts all
 `3am-deployments` runs against that customer.
 
 It is **not** something customers run — it is published here so
-customers can audit the key's policy and confirm the kill-switch
-model is what they were told.
+customers can audit the topology and policy and confirm the
+kill-switch model is what they were told.
 
-### Step 1 — Create the key
+### Topology
 
-1. Sign in to the AxelSpire CI account (`033113129683`) with
-   `AdministratorAccess` in region `eu-west-1`.
-2. **KMS → Customer managed keys → Create key**.
-3. Key type: **Symmetric**. Key usage: **Encrypt and decrypt**.
-4. Advanced options: **KMS** (single-region). Multi-region is not
-   used; the state bucket is regional.
-5. **Next**.
-6. Alias: `3am-ci/<customer-id>` (e.g. `3am-ci/acme-corp`). The
-   `<customer-id>` slug is the same value the bootstrap script
-   prints as `Customer ID slug:` during `apply`.
-7. Description: `AxelSpire CI CMK for customer <customer-id>. Encrypts the customer's Terraform state bucket and DynamoDB lock table. Disabling this key is the platform-level kill switch.`
-8. Tags: `Service=3am`, `CustomerId=<customer-id>`, `ManagedBy=console`.
-9. **Next**.
-10. Key administrators: the AxelSpire operator role(s) that should
-    be able to schedule deletion / disable the key. Do **not** add
-    `GitHubActions-CustomerDeploy` here (it is a data-plane user,
-    not an administrator).
-11. **Next**.
-12. Key users: **add `GitHubActions-CustomerDeploy`** so the
-    cross-account deploy pipeline can use the key. AWS will
-    auto-generate a key policy statement granting
-    `kms:Encrypt`, `kms:Decrypt`, `kms:ReEncrypt*`,
-    `kms:GenerateDataKey*`, `kms:DescribeKey` to that principal.
-13. **Next**, review, **Finish**.
+Each customer gets one logical CMK in the AxelSpire CI account
+(`033113129683`), provisioned as a **multi-region key (MRK)**:
 
-### Step 2 — Edit the key policy
+- **Primary** — region `eu-west-1`, created by Terragrunt from the
+  module at `3am-deployments/_modules/customer-ci-key/` via the
+  per-customer leaf
+  `platform/ci/eu-west-1/customer-keys/<customer-id>/`.
+- **Replica(s)** — one per customer deployment region (e.g.
+  `us-east-1`), created from
+  `3am-deployments/_modules/customer-ci-key-replica/` via the leaf
+  `platform/ci/<customer-region>/customer-keys/<customer-id>/`.
 
-The console-generated policy grants the key user the standard
-data-plane actions, but the customer-side state bucket and DynamoDB
-table also need to use the key from **the customer account's
-service principals** (S3, DynamoDB) on the data path. Replace the
-default key policy with:
+Both primary and replicas share key material and the same alias
+name `alias/3am-ci/<customer-id>` in their respective regions.
+Replicas are required because DynamoDB SSE-KMS demands a same-region
+customer-managed key for the customer's lock table.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "EnableIAMUserPermissions",
-      "Effect": "Allow",
-      "Principal": { "AWS": "arn:aws:iam::033113129683:root" },
-      "Action": "kms:*",
-      "Resource": "*"
-    },
-    {
-      "Sid": "AllowAxelspireCustomerDeployUse",
-      "Effect": "Allow",
-      "Principal": { "AWS": "arn:aws:iam::033113129683:role/GitHubActions-CustomerDeploy" },
-      "Action": [
-        "kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*",
-        "kms:GenerateDataKey*", "kms:DescribeKey"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "AllowCustomerAccountDataPlane",
-      "Effect": "Allow",
-      "Principal": { "AWS": "*" },
-      "Action": [
-        "kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*",
-        "kms:GenerateDataKey*", "kms:DescribeKey"
-      ],
-      "Resource": "*",
-      "Condition": {
-        "StringEquals": {
-          "aws:PrincipalAccount": "<customer-account-id>"
-        },
-        "StringLike": {
-          "kms:ViaService": [
-            "s3.*.amazonaws.com",
-            "dynamodb.*.amazonaws.com"
-          ]
-        }
-      }
-    },
-    {
-      "Sid": "AllowCustomerAccountCreateGrantForAWSServices",
-      "Effect": "Allow",
-      "Principal": { "AWS": "*" },
-      "Action": "kms:CreateGrant",
-      "Resource": "*",
-      "Condition": {
-        "StringEquals": {
-          "aws:PrincipalAccount": "<customer-account-id>"
-        },
-        "Bool": {
-          "kms:GrantIsForAWSResource": "true"
-        }
-      }
-    }
-  ]
-}
+### Step 1 — Apply the Terragrunt leaves
+
+The two leaves above are scaffolded by the customer-onboarding
+workflow. Merging the onboarding PR triggers
+`.github/workflows/platform-deploy.yml`, which applies the primary
+leaf and any replica leaves. There is no console walkthrough — the
+modules are the canonical source for the resource definitions and
+key policy.
+
+If the customer ran `3am-infra-bootstrap` against a key that was
+provisioned by hand (the legacy single-region console flow), see
+`3am-deployments/docs/CUSTOMER-ONBOARDING-OPS.md` §6 ("Path B —
+Import the manually-created CMK") for the import procedure that
+brings the existing key under Terragrunt management.
+
+### Step 2 — Key policy
+
+Both `customer-ci-key` (primary) and `customer-ci-key-replica` ship
+the same six-statement policy — MRK replicas in AWS KMS do **not**
+inherit the primary's key policy, so each region gets the policy
+set explicitly by its respective module. The statements are:
+
+| Sid | Principal | Actions |
+|---|---|---|
+| `EnableRootPermissions` | CI account root | `kms:*` |
+| `AllowAxelspireCIKeyManagement` *(conditional)* | AxelSpire CI admin roles (from `platform/ci/account.hcl → ci_key_admin_role_arns`) | `kms:*` |
+| `AllowCustomerDeploymentRoleDataPlane` | `arn:aws:iam::<customer-account>:role/ThreeAM-Deployment` | `Encrypt`, `Decrypt`, `ReEncrypt{From,To}`, `GenerateDataKey{,WithoutPlaintext}`, `DescribeKey` |
+| `AllowCustomerDriftReaderDecrypt` | `arn:aws:iam::<customer-account>:role/ThreeAM-DriftReader` | `Decrypt`, `DescribeKey` |
+| `AllowCustomerS3Service` | `s3.amazonaws.com` (gated by `kms:CallerAccount` = customer + `kms:ViaService` in customer's regions) | `Encrypt`, `Decrypt`, `ReEncrypt*`, `GenerateDataKey*`, `DescribeKey` |
+| `AllowCustomerLambdaService` | `lambda.amazonaws.com` (same conditions) | `Decrypt`, `DescribeKey` |
+
+The customer's `ThreeAM-Deployment` role is named explicitly rather
+than granting the customer account at large, so the data-plane grant
+is pinned to the one role the customer-deploy pipeline actually
+assumes. The S3 and Lambda service grants exist so customer-region
+SSE-KMS calls against the state bucket (and Lambda code zips) can
+resolve the CMK on the customer's behalf without needing a separate
+`kms:CreateGrant` statement — the modules use `kms:ViaService` and
+`kms:CallerAccount` to bound those service principals to the
+specific customer account and regions.
+
+The canonical sources for the policy and its rationale:
+
+- `3am-deployments/_modules/customer-ci-key/kms.tf` (primary)
+- `3am-deployments/_modules/customer-ci-key-replica/kms.tf` (replica)
+
+`GitHubActions-CustomerDeploy` does **not** appear as a principal on
+the key policy. At runtime the GHA role `AssumeRole`s into the
+customer's `ThreeAM-Deployment` role, and that role is what touches
+the CMK — granting the GHA role directly would weaken the kill-switch
+boundary (a disabled key would still leave the GHA role with a stale
+data-plane grant).
+
+### Step 3 — Send the replica's key-ID ARN to the customer
+
+The customer-side bootstrap script requires the **key-ID ARN** of
+the MRK replica in the customer's deployment region — alias ARNs
+are rejected (IAM `Resource` matching does not authorize via
+aliases) and DynamoDB SSE-KMS requires a same-region key.
+
+Obtain it from the `customer-ci-key-replica` Terragrunt leaf for the
+customer/region pair:
+
+```sh
+cd 3am-deployments/platform/ci/<customer-region>/customer-keys/<customer-id>/
+terragrunt output -raw kms_key_arn
+# => arn:aws:kms:<customer-region>:033113129683:key/12345678-1234-1234-1234-123456789012
 ```
 
-The `AllowCustomerAccountDataPlane` statement is what makes the
-state bucket and lock table actually work on the customer side.
-`aws:PrincipalAccount` pins it to the specific customer account, so
-no other AWS account can ever use this key — even by accident.
-
-The separate `AllowCustomerAccountCreateGrantForAWSServices`
-statement covers `kms:CreateGrant` specifically. DynamoDB
-`CreateTable` against a customer-managed CMK installs a per-table
-grant on the caller's behalf at table-creation time and fails
-without this permission. The `kms:GrantIsForAWSResource=true`
-condition restricts it to grants AWS services themselves create
-(S3, DynamoDB) — the customer account cannot mint arbitrary grants
-of its own against the key, preserving the kill-switch model.
-
-`kms:CreateGrant` has to live in its own statement because the
-`Bool` condition `kms:GrantIsForAWSResource` only applies to grant
-operations; combining it with `Encrypt`/`Decrypt`/etc in a single
-statement would make those non-grant calls fail the condition and
-get denied. `kms:ViaService` is intentionally omitted on the grant
-statement — the grant is made by the service on the caller's
-behalf, and AWS recommends `kms:GrantIsForAWSResource` as the
-canonical guard for that path.
-
-`GitHubActions-CustomerDeploy` deliberately does **not** receive
-`kms:CreateGrant`. At runtime the GHA role `AssumeRole`s into the
-customer's `ThreeAM-Deployment` role and only performs
-`GetItem`/`PutItem` against the existing lock row — no new
-encrypted resources are ever created from the AxelSpire side, so
-grant-management permission would be unused and would weaken the
-boundary.
-
-### Step 3 — Confirm the alias is in place
-
-The customer-side bootstrap script references the key via its
-deterministic alias (`alias/3am-ci/<customer-id>`), so no value
-needs to be sent to the customer in the standard flow — confirming
-existence is enough. For audit, recovery, or non-default-alias
-scenarios, copy the **Key ARN** from the key details page; it looks
-like:
-
-```
-arn:aws:kms:eu-west-1:033113129683:key/12345678-1234-1234-1234-123456789012
-```
-
-A customer can pass either form to the bootstrap script as an
-override via `--axelspire-artifact-kms-key-arn <value>`.
+The customer passes this value via `--axelspire-artifact-kms-key-arn
+<key-id-arn>`.
 
 ### Step 4 — Verify
 
+Run against each region the customer is deployed in (primary +
+replicas):
+
 ```sh
-aws kms describe-key --key-id alias/3am-ci/<customer-id> \
-  --query '{Arn:KeyMetadata.Arn,State:KeyMetadata.KeyState,Enabled:KeyMetadata.Enabled}' \
-  --output table
-aws kms get-key-policy --key-id alias/3am-ci/<customer-id> \
-  --policy-name default --output text
+for region in eu-west-1 <customer-region> ; do
+  aws kms describe-key --region "${region}" \
+    --key-id alias/3am-ci/<customer-id> \
+    --query '{Region:`'"${region}"'`,Arn:KeyMetadata.Arn,State:KeyMetadata.KeyState,Enabled:KeyMetadata.Enabled,MultiRegion:KeyMetadata.MultiRegion,Role:KeyMetadata.MultiRegionConfiguration.MultiRegionKeyType}' \
+    --output table
+  aws kms get-key-policy --region "${region}" \
+    --key-id alias/3am-ci/<customer-id> \
+    --policy-name default --output text
+done
 ```
 
-Expect `Enabled = True`, `KeyState = Enabled`, and the three
-statements above in the policy.
+Expect `Enabled = True`, `KeyState = Enabled`, `MultiRegion = True`,
+`Role = PRIMARY` for `eu-west-1` and `REPLICA` for the customer
+region(s), and the six statements from Step 2 in each region's
+policy.
 
 ### Revocation / kill-switch
 
 To suspend a customer:
 
 ```sh
-aws kms disable-key --key-id alias/3am-ci/<customer-id>
+aws kms disable-key --region eu-west-1 \
+  --key-id alias/3am-ci/<customer-id>
+for region in <customer-region-1> <customer-region-2> ; do
+  aws kms disable-key --region "${region}" \
+    --key-id alias/3am-ci/<customer-id>
+done
 ```
 
-Effect: every subsequent S3 `GetObject` / `PutObject` and every
-DynamoDB `GetItem` / `PutItem` against the customer's state bucket
-and lock table fails with `KMSDisabledException`. All
+Each region's primary/replica must be disabled individually — MRK
+replicas share key material but each has its own enable/disable
+state. Effect: every subsequent S3 `GetObject` / `PutObject` and
+every DynamoDB `GetItem` / `PutItem` against the customer's state
+bucket and lock table fails with `KMSDisabledException`. All
 `3am-deployments` Terraform plans / applies for that customer
-abort immediately. Re-enable the key to resume.
+abort immediately. Re-enable each region's key to resume.
 
-To permanently terminate:
+To permanently terminate, schedule deletion of every replica
+first, then the primary. AWS will not destroy the primary's
+material while any replica still exists, even if its waiting
+window has elapsed — the primary stays in `PendingDeletion` until
+all replicas are gone.
 
 ```sh
-aws kms schedule-key-deletion --key-id alias/3am-ci/<customer-id> \
+for region in <customer-region-1> <customer-region-2> ; do
+  aws kms schedule-key-deletion --region "${region}" \
+    --key-id alias/3am-ci/<customer-id> \
+    --pending-window-in-days 30
+done
+# Only after all replicas are scheduled for deletion:
+aws kms schedule-key-deletion --region eu-west-1 \
+  --key-id alias/3am-ci/<customer-id> \
   --pending-window-in-days 30
 ```
 
-Once the pending window elapses the key is destroyed and the
-customer's existing state objects become permanently unreadable —
-this is intentional and irreversible.
+Once the pending window elapses on all keys, the material is
+destroyed and the customer's existing state objects become
+permanently unreadable — this is intentional and irreversible.
 
