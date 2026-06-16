@@ -162,6 +162,8 @@ two nested objects — `phase0` (Identity Center / SCPs) and `phase5`
   "account_name": "3AM-AcmeCorp",
   "ou_id": "ou-abcd-12345678",
   "region": "eu-west-1",
+  "deployment_region": "eu-west-1",
+  "idc_region": "us-east-1",
   "partition": "aws",
   "phase0": {
     "identity_center_instance_arn": "arn:aws:sso:::instance/ssoins-…",
@@ -194,6 +196,12 @@ two nested objects — `phase0` (Identity Center / SCPs) and `phase5`
   }
 }
 ```
+
+`region` echoes `deployment_region` (where the state bucket, lock
+table, customer CMK and external-ID secret live); `idc_region` is the
+Identity Center home region the script's `AWS_REGION` was pointing at
+when Phase 0 ran. The two are equal for single-region orgs and may
+differ when `--deployment-region` was passed.
 
 The **external-ID secret value** is deliberately *not* in this file. It
 is generated inside the workload account at `apply` time and stays in
@@ -255,6 +263,11 @@ To resolve:
 2. Pick the home region for Identity Center — typically the same
    region you intend to operate the 3AM workload in (e.g.
    `eu-west-1`). The home region is **permanent**; choose deliberately.
+   If you need IDC in one region but the 3AM workload (state bucket,
+   lock table, customer CMK) in another, pass
+   `--deployment-region <workload-region>` to the script. `AWS_REGION`
+   selects the IDC region; `--deployment-region` selects the workload
+   region. Both must appear in `--allowed-regions`.
 3. Console → **IAM Identity Center** → **Enable**. Wait until the
    landing page shows the instance ARN and identity store ID (usually
    under a minute).
