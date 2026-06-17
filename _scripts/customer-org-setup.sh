@@ -12,6 +12,7 @@
 set -Eeuo pipefail
 
 BOOTSTRAP_VERSION="0.2.0"
+BOOTSTRAP_VARIANT="multi-account"
 
 # ---------------------------------------------------------------------------
 # Defaults & globals
@@ -1696,8 +1697,10 @@ print_outputs_json () {
       --arg axelspire_kms_arn          "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" \
       --arg axelspire_s3_arn           "${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}" \
       --arg bootstrap_version          "${BOOTSTRAP_VERSION}" \
+      --arg bootstrap_variant          "${BOOTSTRAP_VARIANT}" \
       '{
         bootstrap_version: $bootstrap_version,
+        bootstrap_variant: $bootstrap_variant,
         customer_name: $customer_name,
         customer_id: $customer_id,
         mgmt_account_id: $mgmt_account_id,
@@ -1743,6 +1746,7 @@ print_outputs_json () {
     # printf simple; consumers should prefer the jq path.
     printf '{\n'
     printf '  "bootstrap_version": "%s",\n'                   "${BOOTSTRAP_VERSION}"
+    printf '  "bootstrap_variant": "%s",\n'                   "${BOOTSTRAP_VARIANT}"
     printf '  "customer_name": "%s",\n'                       "${CUSTOMER_NAME}"
     printf '  "customer_id": "%s",\n'                         "${CUSTOMER_ID}"
     printf '  "mgmt_account_id": "%s",\n'                     "${MGMT_ACCOUNT_ID}"

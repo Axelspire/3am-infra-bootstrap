@@ -1315,12 +1315,6 @@ leaf and any replica leaves. There is no console walkthrough — the
 modules are the canonical source for the resource definitions and
 key policy.
 
-If the customer ran `3am-infra-bootstrap` against a key that was
-provisioned by hand (the legacy single-region console flow), see
-`3am-deployments/docs/CUSTOMER-ONBOARDING-OPS.md` §6 ("Path B —
-Import the manually-created CMK") for the import procedure that
-brings the existing key under Terragrunt management.
-
 ### Step 2 — Key policy
 
 Both `customer-ci-key` (primary) and `customer-ci-key-replica` ship
