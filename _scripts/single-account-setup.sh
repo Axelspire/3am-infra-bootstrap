@@ -22,6 +22,7 @@ set -Eeuo pipefail
 
 BOOTSTRAP_VERSION="0.2.0"
 BOOTSTRAP_VARIANT="single-account"
+SCRIPT_LAST_UPDATED="2026-06-19"
 
 # ---------------------------------------------------------------------------
 # Defaults & globals
@@ -37,6 +38,8 @@ PERMS_EC2_FILE="/tmp/3am-deployment-permissions-ec2.json"
 PERMS_EXTRA_FILE="/tmp/3am-deployment-permissions-extra.json"
 CMK_POLICY_FILE="/tmp/3am-customer-cmk-policy.json"
 STATE_BUCKET_POLICY_FILE="/tmp/3am-state-bucket-policy.json"
+DRIFT_TRUST_POLICY_FILE="/tmp/3am-drift-reader-trust.json"
+DRIFT_STATE_POLICY_FILE="/tmp/3am-drift-reader-state.json"
 
 ALLOWED_REGIONS_CSV="eu-west-1,us-east-1"
 PLATFORM_ADMINS_GROUP="3AM-Platform-Admins"
@@ -54,7 +57,9 @@ COMMAND="apply"
 AXELSPIRE_CI_ACCOUNT_ID="033113129683"
 AXELSPIRE_CI_REGION="eu-west-1"
 AXELSPIRE_CI_ROLE_NAME="GitHubActions-CustomerDeploy"
+AXELSPIRE_CI_DRIFT_ROLE_NAME="GitHubActions-DriftDetect"
 DEPLOYMENT_ROLE_NAME="ThreeAM-Deployment"
+DRIFT_READER_ROLE_NAME="ThreeAM-DriftReader"
 EXTERNAL_ID_SECRET_NAME="/3am/license/external-id"
 REQUIRE_LICENSE_SESSION_TAG=true
 KMS_MULTI_REGION=false
@@ -88,6 +93,7 @@ BG_ROLE_ARN=""
 
 # Phase 5 outputs.
 DEPLOYMENT_ROLE_ARN=""
+DRIFT_READER_ROLE_ARN=""
 CUSTOMER_CMK_ARN=""
 CUSTOMER_CMK_KEY_ID=""
 EXTERNAL_ID_SECRET_ARN=""
@@ -988,6 +994,112 @@ phase5_put_role_inline_policies () {
     --policy-document "file://${PERMS_EXTRA_FILE}" >/dev/null
 }
 
+# Read-only companion to ThreeAM-Deployment. Created during bootstrap so
+# the per-customer CI CMK key policy can reference a valid principal
+# before customer-deploy onboarding runs. Mirrors deploy/iam-drift-reader.tf.
+phase5_write_drift_reader_policy_files () {
+  log "writing ${DRIFT_TRUST_POLICY_FILE}"
+  cat > "${DRIFT_TRUST_POLICY_FILE}" <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Sid": "AllowAxelspireDriftDetectAssumeRole",
+    "Effect": "Allow",
+    "Principal": {
+      "AWS": "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_DRIFT_ROLE_NAME}"
+    },
+    "Action": "sts:AssumeRole",
+    "Condition": {
+      "StringLike": { "sts:RoleSessionName": ["3am-*", "tg-*"] }
+    }
+  }]
+}
+EOF
+  python3 -m json.tool "${DRIFT_TRUST_POLICY_FILE}" >/dev/null
+
+  log "writing ${DRIFT_STATE_POLICY_FILE}"
+  cat > "${DRIFT_STATE_POLICY_FILE}" <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "S3ReadOnStateBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:ListBucket",
+        "s3:ListBucketVersions",
+        "s3:GetBucketVersioning",
+        "s3:GetEncryptionConfiguration",
+        "s3:GetBucketLocation"
+      ],
+      "Resource": [
+        "arn:${PARTITION}:s3:::${STATE_BUCKET_NAME}",
+        "arn:${PARTITION}:s3:::${STATE_BUCKET_NAME}/*"
+      ]
+    },
+    {
+      "Sid": "DynamoDBLockOnStateLockTable",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:DescribeTable"
+      ],
+      "Resource": "arn:${PARTITION}:dynamodb:${DEPLOYMENT_REGION}:${ACCOUNT_ID}:table/${STATE_LOCK_TABLE_NAME}"
+    },
+    {
+      "Sid": "KmsDecryptOnCustomerCmk",
+      "Effect": "Allow",
+      "Action": ["kms:Decrypt", "kms:DescribeKey"],
+      "Resource": "${CUSTOMER_CMK_ARN}"
+    },
+    {
+      "Sid": "KmsDecryptOnAxelspireCiCmk",
+      "Effect": "Allow",
+      "Action": ["kms:Decrypt", "kms:DescribeKey"],
+      "Resource": "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"
+    }
+  ]
+}
+EOF
+  python3 -m json.tool "${DRIFT_STATE_POLICY_FILE}" >/dev/null
+}
+
+phase5_get_or_create_drift_reader_role () {
+  local arn
+  if aws iam get-role --role-name "${DRIFT_READER_ROLE_NAME}" >/dev/null 2>&1; then
+    log "reusing IAM role ${DRIFT_READER_ROLE_NAME}; updating trust policy"
+    aws iam update-assume-role-policy \
+      --role-name "${DRIFT_READER_ROLE_NAME}" \
+      --policy-document "file://${DRIFT_TRUST_POLICY_FILE}" >/dev/null
+  else
+    log "creating IAM role ${DRIFT_READER_ROLE_NAME}"
+    # shellcheck disable=SC2046
+    aws iam create-role \
+      --role-name "${DRIFT_READER_ROLE_NAME}" \
+      --assume-role-policy-document "file://${DRIFT_TRUST_POLICY_FILE}" \
+      --description "Read-only cross-account role assumed by AxelSpire drift-detect for ${CUSTOMER_ID}." \
+      --max-session-duration 3600 \
+      --tags $(phase5_common_tags_cli) >/dev/null
+  fi
+  arn=$(aws iam get-role --role-name "${DRIFT_READER_ROLE_NAME}" \
+          --query 'Role.Arn' --output text)
+  DRIFT_READER_ROLE_ARN="${arn}"
+}
+
+phase5_put_drift_reader_policies () {
+  log "putting inline policies on ${DRIFT_READER_ROLE_NAME}"
+  aws iam attach-role-policy --role-name "${DRIFT_READER_ROLE_NAME}" \
+    --policy-arn "arn:${PARTITION}:iam::aws:policy/ReadOnlyAccess" >/dev/null 2>&1 \
+    || true
+  aws iam put-role-policy --role-name "${DRIFT_READER_ROLE_NAME}" \
+    --policy-name ThreeAM-DriftReader-State \
+    --policy-document "file://${DRIFT_STATE_POLICY_FILE}" >/dev/null
+}
+
 # CMK lookup-by-alias then create-if-missing. Re-applies the key policy
 # on every run so trust changes (rotated admin role ARNs, etc.) take
 # effect. Key rotation is enabled if not already.
@@ -1150,6 +1262,7 @@ phase5_put_ssm_params () {
   _put_ssm /3am/state/bucket-name     "Name of the S3 bucket holding Terraform state." "${STATE_BUCKET_NAME}"
   _put_ssm /3am/state/lock-table-name "Name of the DynamoDB state-lock table." "${STATE_LOCK_TABLE_NAME}"
   _put_ssm /3am/iam/deployment-role-arn "ARN of the ${DEPLOYMENT_ROLE_NAME} role." "${DEPLOYMENT_ROLE_ARN}"
+  _put_ssm /3am/iam/drift-reader-role-arn "ARN of the ${DRIFT_READER_ROLE_NAME} role." "${DRIFT_READER_ROLE_ARN}"
   _put_ssm /3am/axelspire/artifact-kms-key-arn   "Key-ID ARN of the customer-region MRK replica of the AxelSpire-owned CI CMK." "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"
   _put_ssm /3am/axelspire/artifact-s3-bucket-arn "ARN of the AxelSpire CI artifacts S3 bucket." "${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}"
   _put_ssm /3am/bootstrap/version     "Version of the bootstrap that was last applied." "${BOOTSTRAP_VERSION}"
@@ -1267,11 +1380,16 @@ EOF
   phase5_write_policy_files "${external_id_value}" "${admin_arns_json}"
   phase5_put_cmk_policy
 
-  log "== Phase 5 step 5/6: state bucket + lock table =="
+  log "== Phase 5 step 5/7: state bucket + lock table =="
   phase5_get_or_create_state_bucket
   phase5_get_or_create_lock_table
 
-  log "== Phase 5 step 6/6: SSM parameters =="
+  log "== Phase 5 step 6/7: ThreeAM-DriftReader role =="
+  phase5_write_drift_reader_policy_files
+  phase5_get_or_create_drift_reader_role
+  phase5_put_drift_reader_policies
+
+  log "== Phase 5 step 7/7: SSM parameters =="
   phase5_put_ssm_params
 
   if ${_saved_region_set}; then
@@ -1312,6 +1430,8 @@ do_apply () {
   say "Skip SCPs:          ${SKIP_SCPS}"
   say "Skip Phase 5:       ${SKIP_BOOTSTRAP}"
   say "AxelSpire CI acct:  ${AXELSPIRE_CI_ACCOUNT_ID} (${AXELSPIRE_CI_REGION})"
+  say "Script version:     ${BOOTSTRAP_VERSION} (${BOOTSTRAP_VARIANT})"
+  say "Script last updated: ${SCRIPT_LAST_UPDATED}"
   say
   if ! ${AUTO_APPROVE}; then
     read -r -p "Proceed? [y/N] " ans
@@ -1439,6 +1559,8 @@ resolve_outputs () {
   [ -n "$CUSTOMER_ID" ] && phase5_compute_axelspire_arns
   DEPLOYMENT_ROLE_ARN=$(aws iam get-role --role-name "${DEPLOYMENT_ROLE_NAME}" \
                           --query 'Role.Arn' --output text 2>/dev/null || echo "")
+  DRIFT_READER_ROLE_ARN=$(aws iam get-role --role-name "${DRIFT_READER_ROLE_NAME}" \
+                            --query 'Role.Arn' --output text 2>/dev/null || echo "")
   CUSTOMER_CMK_KEY_ID=$(aws kms describe-key --key-id "${CUSTOMER_CMK_ALIAS}" \
                           --region "${DEPLOYMENT_REGION}" \
                           --query 'KeyMetadata.KeyId' --output text 2>/dev/null || echo "")
@@ -1493,6 +1615,7 @@ print_outputs_human () {
 
   Phase 5 (bootstrap):
   deployment_role_arn                 : ${DEPLOYMENT_ROLE_ARN:-<missing>}
+  drift_reader_role_arn               : ${DRIFT_READER_ROLE_ARN:-<missing>}
   customer_cmk_arn                    : ${CUSTOMER_CMK_ARN:-<missing>}
   customer_cmk_alias                  : ${CUSTOMER_CMK_ALIAS}
   external_id_secret_arn              : ${EXTERNAL_ID_SECRET_ARN:-<missing>}
@@ -1531,6 +1654,8 @@ print_outputs_json () {
       --arg bg_role_arn                "${BG_ROLE_ARN}" \
       --arg deployment_role_arn        "${DEPLOYMENT_ROLE_ARN}" \
       --arg deployment_role_name       "${DEPLOYMENT_ROLE_NAME}" \
+      --arg drift_reader_role_arn      "${DRIFT_READER_ROLE_ARN}" \
+      --arg drift_reader_role_name     "${DRIFT_READER_ROLE_NAME}" \
       --arg customer_cmk_arn           "${CUSTOMER_CMK_ARN}" \
       --arg customer_cmk_key_id        "${CUSTOMER_CMK_KEY_ID}" \
       --arg customer_cmk_alias         "${CUSTOMER_CMK_ALIAS}" \
@@ -1571,6 +1696,9 @@ print_outputs_json () {
         phase5: {
           deployment_role_name: $deployment_role_name,
           deployment_role_arn: $deployment_role_arn,
+          drift_reader_role_name: $drift_reader_role_name,
+          drift_reader_role_arn: $drift_reader_role_arn,
+          customer_kms_principals_ready: ($deployment_role_arn != "" and $drift_reader_role_arn != ""),
           customer_cmk_alias: $customer_cmk_alias,
           customer_cmk_key_id: $customer_cmk_key_id,
           customer_cmk_arn: $customer_cmk_arn,

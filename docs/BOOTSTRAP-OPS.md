@@ -293,17 +293,19 @@ Open the JSON and confirm:
 jq '{customer_id, account_id, region, partition,
      phase0_admin_roles: (.phase0.customer_admin_role_arns | length),
      phase5_complete: (
-       .phase5 |
-       (.deployment_role_arn // "") != "" and
-       (.customer_cmk_arn // "")    != "" and
-       (.state_bucket_name // "")   != "" and
-       (.external_id_secret_arn // "") != ""
-     )}' "$HOME/3am-org-setup-outputs.json"
+       .phase5.customer_kms_principals_ready // false
+     ),
+     phase5: {
+       deployment_role: (.phase5.deployment_role_arn // ""),
+       drift_reader: (.phase5.drift_reader_role_arn // ""),
+       state_bucket: (.phase5.state_bucket_name // "")
+     }}' "$HOME/3am-org-setup-outputs.json"
 ```
 
-Expected: `customer_id` matches the intake slug, `phase0_admin_roles`
-is `2` (PlatformAdmin + BreakGlass), `phase5_complete` is `true`.
-If any phase5 field is empty, re-run `apply`.
+Expected after **Pass B** (full Phase 5): `customer_id` matches the intake
+slug, `phase0_admin_roles` is `2`, `phase5_complete` is `true`, and both
+IAM role ARNs are non-empty. After **Pass A** (`--skip-bootstrap`),
+`phase5_complete` is `false` — proceed with `customer-onboard` per §9.
 
 ### 8.1 Where each JSON field is consumed downstream
 
@@ -320,7 +322,8 @@ key leaf.
 | `.region` | `initial_region` workflow input → leaf region dir | `customer-onboard.yml` |
 | `.phase0.customer_admin_role_arns` | `customer_admin_roles` CSV input → `customer.hcl` | `customer-onboard.yml` |
 | `.phase5.axelspire_artifact_kms_key_arn` | Audit echo — must equal the value AxelSpire issued (replica leaf's `terragrunt output kms_key_arn`) | `CUSTOMER-ONBOARDING-OPS.md §3` |
-| Everything else (`.phase5.deployment_role_arn`, `.phase5.state_bucket_name`, …) | Informational — written inline to DynamoDB attribute `bootstrap_json` for audit/recovery | `customer-intake-write.sh --from-org-setup` |
+| `.phase5.customer_kms_principals_ready` | When `true`, drives `bootstrap-handoff-complete.sh` on the deployments side | ops script |
+| Everything else (`.phase5.deployment_role_arn`, `.phase5.drift_reader_role_arn`, `.phase5.state_bucket_name`, …) | Informational — written inline to DynamoDB attribute `bootstrap_json` for audit/recovery | `customer-intake-write.sh --from-org-setup` |
 
 The remaining three scaffold inputs (`vpc_cidr`, `license_tier`,
 `approval_tier`) come from the **intake form**
@@ -339,12 +342,25 @@ cheaper to spot it here.
 
 ## 9. Hand-off to the deployments side
 
-After a successful `apply` and a clean `outputs-json`, the JSON is the
-only thing that crosses the repo boundary into `3am-deployments`. The
-hand-off is three commands in this order:
+Bootstrap crosses into `3am-deployments` in **two passes**. Phase 5
+requires the per-customer CI CMK key-ID ARN, which only exists after
+`customer-onboard` has merged and `platform-deploy` wave 1 has applied
+the `customer-ci-key` leaves — so a single full `apply` before onboard
+is not the normal path.
 
-**a. Write the intake row** — records commercial metadata and stores
-the bootstrap JSON inline under the `bootstrap_json` attribute:
+### Pass A — account / Phase 0 only (before the CI CMK exists)
+
+Run with `--skip-bootstrap` (no `--axelspire-artifact-kms-key-arn` needed):
+
+```bash
+./customer-org-setup.sh apply --skip-bootstrap \
+  --customer-name "Acme Corp" --customer-id acme-corp \
+  ...
+./customer-org-setup.sh outputs-json > "$HOME/3am-org-setup-outputs.json"
+```
+
+**a. Write the intake row** (stores Phase 0 fields + JSON; `phase5.*`
+will be empty — that is expected):
 
 ```bash
 cd 3am-deployments
@@ -352,25 +368,43 @@ cd 3am-deployments
   --from-org-setup "$HOME/3am-org-setup-outputs.json"
 ```
 
-On success, the script prints a copy-paste-ready
-`gh workflow run customer-onboard.yml` command with `customer_id`,
-`aws_account_id`, `initial_region`, and `customer_admin_roles`
-pre-filled from the JSON.
+**b. Trigger `customer-onboard.yml`** — the script prints a copy-paste
+`gh workflow run` with `customer_id`, `aws_account_id`, `initial_region`,
+and `customer_admin_roles` pre-filled. Add `vpc_cidr`, `license_sku`, and
+`approval_tier` from the intake form.
 
-**b. Fill in the contract-derived blanks and trigger the workflow** —
-`vpc_cidr`, `license_tier`, and `approval_tier` come from the intake
-form, not the bootstrap. Paste the printed command, fill those three,
-and run it. The workflow invokes `_scripts/customer-scaffold.sh`
-internally to render `customers/<id>/<region>/` and the CI key leaf,
-then opens a PR. If you lost the printed command, two equivalent
-fallback patterns (jq-extraction from the JSON, and hand-built) are
-documented in
-[`3am-deployments/docs/CUSTOMER-ONBOARDING-OPS.md` §4](../../3am-deployments/docs/CUSTOMER-ONBOARDING-OPS.md#4-trigger-customer-onboardyml)
-as Option B and Option C.
+**c. Merge the onboard PR → `platform-deploy` wave 1** — creates the
+MRK primary (and replica when needed). Retrieve the same-region key-ID
+ARN with `terragrunt output -raw kms_key_arn` on the appropriate CI key
+leaf (see `CUSTOMER-ONBOARDING-OPS.md` §6).
 
-**c. Continue with `CUSTOMER-ONBOARDING-OPS.md` §4 onward** for PR
-review and the `platform-deploy` apply that creates the per-customer
-CI CMK.
+### Pass B — Phase 5 bootstrap (after the CI CMK exists)
+
+Re-run **full** `apply` (or `--skip-org` when Phase 0 already succeeded)
+with `--axelspire-artifact-kms-key-arn` set to the key-ID ARN from pass A
+step c:
+
+```bash
+./customer-org-setup.sh apply \
+  ... \
+  --axelspire-artifact-kms-key-arn arn:aws:kms:eu-west-1:033113129683:key/mrk-...
+./customer-org-setup.sh outputs-json > "$HOME/3am-org-setup-outputs.json"
+```
+
+Confirm `phase5.customer_kms_principals_ready` is `true` and both IAM
+roles are populated (see §8).
+
+**d. Flip the CI key policy gate and refresh intake:**
+
+```bash
+cd 3am-deployments
+./_scripts/bootstrap-handoff-complete.sh acme-corp \
+  --from-bootstrap-json "$HOME/3am-org-setup-outputs.json"
+```
+
+Commit, merge, and run **`platform-deploy` wave 2**. Store the
+customer's external-ID value in CI Secrets Manager, then trigger
+**`customer-deploy`** (see `CUSTOMER-ONBOARDING-OPS.md` §1 steps 5–7).
 
 > In the normal flow you do not invoke `customer-scaffold.sh` yourself
 > — `customer-onboard.yml` runs it against repository-pinned templates.
