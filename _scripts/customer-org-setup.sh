@@ -1013,6 +1013,8 @@ EOF
         "s3:CreateBucket","s3:DeleteBucket","s3:PutBucketAcl","s3:PutBucketPolicy",
         "s3:PutBucketPublicAccessBlock","s3:PutBucketOwnershipControls","s3:PutBucketVersioning",
         "s3:PutEncryptionConfiguration","s3:PutLifecycleConfiguration","s3:PutBucketObjectLockConfiguration",
+        "s3:PutBucketTagging",
+        "s3:GetBucket*",
         "s3:GetBucketAcl","s3:GetBucketPolicy","s3:GetBucketPublicAccessBlock","s3:GetBucketOwnershipControls",
         "s3:GetBucketVersioning","s3:GetEncryptionConfiguration","s3:GetLifecycleConfiguration",
         "s3:GetBucketObjectLockConfiguration","s3:GetBucketLocation","s3:ListBucket","s3:ListBucketVersions",
