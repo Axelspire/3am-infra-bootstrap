@@ -871,11 +871,9 @@ EOF
         "s3:PutBucketPublicAccessBlock","s3:PutBucketOwnershipControls","s3:PutBucketVersioning",
         "s3:PutEncryptionConfiguration","s3:PutLifecycleConfiguration","s3:PutBucketObjectLockConfiguration",
         "s3:PutBucketTagging",
-        "s3:GetBucket*",
-        "s3:GetBucketAcl","s3:GetBucketPolicy","s3:GetBucketPublicAccessBlock","s3:GetBucketOwnershipControls",
-        "s3:GetBucketVersioning","s3:GetEncryptionConfiguration","s3:GetLifecycleConfiguration",
-        "s3:GetBucketObjectLockConfiguration","s3:GetBucketLocation","s3:ListBucket","s3:ListBucketVersions",
-        "s3:GetObject","s3:GetObjectVersion","s3:PutObject","s3:DeleteObject"
+        "s3:Get*",
+        "s3:ListBucket","s3:ListBucketVersions",
+        "s3:PutObject","s3:DeleteObject"
       ],
       "Resource": [
         "arn:${PARTITION}:s3:::3am-audit-${ACCOUNT_ID}-${DEPLOYMENT_REGION}",
