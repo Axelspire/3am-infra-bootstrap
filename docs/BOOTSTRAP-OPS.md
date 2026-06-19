@@ -472,3 +472,16 @@ Authoritative reference:
 `3am-infra-bootstrap/README.md → The output JSON`. The schema is
 identical for both `customer-org-setup.sh` and
 `single-account-setup.sh`; only the filename differs.
+
+### 11.4 Keeping the bootstrap scripts in sync
+
+Phase 5 (deployment role, CMK, state backend, SSM, inline IAM policies)
+is duplicated in both bootstrap scripts. **Any Phase 5 change in one
+script must be mirrored in the other** — except `ManagedBy` tag strings
+and org-only wrappers (`assume_workload_creds`, account creation).
+
+After editing either script, run:
+
+```bash
+./_scripts/tests/test_phase5_bootstrap_parity.sh
+```

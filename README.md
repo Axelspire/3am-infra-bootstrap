@@ -1242,7 +1242,10 @@ omits `sts:TagSession`. The deploy chain in
        {
          "Sid": "WritePendingApprovalHashes",
          "Effect": "Allow",
-         "Action": "ssm:PutParameter",
+         "Action": [
+           "ssm:GetParameter",
+           "ssm:PutParameter"
+         ],
          "Resource": "arn:aws:ssm:eu-west-1:033113129683:parameter/3am/pending-approvals/*"
        }
      ]

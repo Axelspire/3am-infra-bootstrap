@@ -27,6 +27,7 @@ TRUST_POLICY_FILE="/tmp/3am-deployment-trust.json"
 PERMS_POLICY_FILE="/tmp/3am-deployment-permissions.json"
 PERMS_EC2_FILE="/tmp/3am-deployment-permissions-ec2.json"
 PERMS_EXTRA_FILE="/tmp/3am-deployment-permissions-extra.json"
+PERMS_ONBOARDING_FILE="/tmp/3am-deployment-permissions-onboarding.json"
 CMK_POLICY_FILE="/tmp/3am-customer-cmk-policy.json"
 STATE_BUCKET_POLICY_FILE="/tmp/3am-state-bucket-policy.json"
 DRIFT_TRUST_POLICY_FILE="/tmp/3am-drift-reader-trust.json"
@@ -708,8 +709,8 @@ resolve_customer_id () {
 # customer-managed key.
 phase5_validate_axelspire_kms_arn () {
   # Strict validation runs only on apply: outputs / outputs-json paths
-  # may recover the ARN from SSM after assuming into the child account
-  # (see resolve_outputs), so an empty value at this point is not fatal.
+  # may recover the ARN from SSM (see resolve_outputs), so an empty
+  # value at this point is not fatal.
   [ "${COMMAND}" = "apply" ] || return 0
   [ -n "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" ] \
     || die "--axelspire-artifact-kms-key-arn is required (key-ID ARN of the customer-region MRK replica; see --help)"
@@ -826,6 +827,9 @@ restore_mgmt_creds () {
 # ---------------------------------------------------------------------------
 # Phase 5 — policy file generation (rewritten on every apply).
 # ---------------------------------------------------------------------------
+# SYNC: keep Phase 5 helpers through phase5_put_ssm_params identical in
+# single-account-setup.sh (except ManagedBy tag strings and org-only wrappers).
+# Run _scripts/tests/test_phase5_bootstrap_parity.sh after edits.
 # Mirrors deploy/iam.tf, deploy/iam-permissions-ec2.tf,
 # deploy/iam-permissions-extra.tf, deploy/kms.tf and deploy/state-backend.tf.
 phase5_write_policy_files () {
@@ -999,6 +1003,39 @@ EOF
 }
 EOF
 
+  log "writing ${PERMS_ONBOARDING_FILE}"
+  cat > "${PERMS_ONBOARDING_FILE}" <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "S3CreateAndManageAuditBucket", "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket","s3:DeleteBucket","s3:PutBucketAcl","s3:PutBucketPolicy",
+        "s3:PutBucketPublicAccessBlock","s3:PutBucketOwnershipControls","s3:PutBucketVersioning",
+        "s3:PutEncryptionConfiguration","s3:PutLifecycleConfiguration","s3:PutObjectLockConfiguration",
+        "s3:GetBucketAcl","s3:GetBucketPolicy","s3:GetBucketPublicAccessBlock","s3:GetBucketOwnershipControls",
+        "s3:GetBucketVersioning","s3:GetEncryptionConfiguration","s3:GetLifecycleConfiguration",
+        "s3:GetObjectLockConfiguration","s3:GetBucketLocation","s3:ListBucket","s3:ListBucketVersions",
+        "s3:GetObject","s3:GetObjectVersion","s3:PutObject","s3:DeleteObject"
+      ],
+      "Resource": [
+        "arn:${PARTITION}:s3:::3am-audit-${ACCOUNT_ID}-${DEPLOYMENT_REGION}",
+        "arn:${PARTITION}:s3:::3am-audit-${ACCOUNT_ID}-${DEPLOYMENT_REGION}/*"
+      ] },
+    { "Sid": "Route53CreateCustomerZone", "Effect": "Allow",
+      "Action": ["route53:CreateHostedZone","route53:DeleteHostedZone",
+                 "route53:ChangeTagsForResource","route53:ListTagsForResource"],
+      "Resource": ["*"] },
+    { "Sid": "SsmWriteOnboardingParameters", "Effect": "Allow",
+      "Action": ["ssm:PutParameter","ssm:DeleteParameter","ssm:DeleteParameters",
+                 "ssm:AddTagsToResource","ssm:RemoveTagsFromResource",
+                 "ssm:DescribeParameters","ssm:GetParameter","ssm:GetParameters",
+                 "ssm:GetParametersByPath"],
+      "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am/*"] }
+  ]
+}
+EOF
+
   log "writing ${CMK_POLICY_FILE}"
   if [ "${admin_arns_json}" = "[]" ] || [ -z "${admin_arns_json}" ]; then
     cat > "${CMK_POLICY_FILE}" <<EOF
@@ -1081,7 +1118,7 @@ EOF
   if command -v python3 >/dev/null 2>&1; then
     local f
     for f in "${TRUST_POLICY_FILE}" "${PERMS_POLICY_FILE}" "${PERMS_EC2_FILE}" \
-             "${PERMS_EXTRA_FILE}" "${CMK_POLICY_FILE}" "${STATE_BUCKET_POLICY_FILE}"; do
+             "${PERMS_EXTRA_FILE}" "${PERMS_ONBOARDING_FILE}" "${CMK_POLICY_FILE}" "${STATE_BUCKET_POLICY_FILE}"; do
       python3 -m json.tool < "${f}" > /dev/null || die "generated ${f} is not valid JSON"
     done
   fi
@@ -1128,6 +1165,9 @@ phase5_put_role_inline_policies () {
   aws iam put-role-policy --role-name "${DEPLOYMENT_ROLE_NAME}" \
     --policy-name ThreeAM-Deployment-Permissions-Extra \
     --policy-document "file://${PERMS_EXTRA_FILE}" >/dev/null
+  aws iam put-role-policy --role-name "${DEPLOYMENT_ROLE_NAME}" \
+    --policy-name ThreeAM-Deployment-Permissions-Onboarding \
+    --policy-document "file://${PERMS_ONBOARDING_FILE}" >/dev/null
 }
 
 phase5_write_drift_reader_policy_files () {
@@ -1324,10 +1364,10 @@ phase5_get_or_create_state_bucket () {
 phase5_get_or_create_lock_table () {
   # The lock table holds only Terraform lock IDs and digests (no state
   # contents), so encrypting it under the customer CMK is sufficient and
-  # avoids requiring the bootstrap caller (OrganizationAccountAccessRole)
-  # to be authorized on the AxelSpire CI CMK. State objects in S3 remain
-  # encrypted under AXELSPIRE_ARTIFACT_KMS_KEY_ARN, which is what carries
-  # the "destroy-key-to-revoke-state" property.
+  # avoids requiring the bootstrap caller to be authorized on the
+  # AxelSpire CI CMK. State objects in S3 remain encrypted under
+  # AXELSPIRE_ARTIFACT_KMS_KEY_ARN, which is what carries the
+  # "destroy-key-to-revoke-state" property.
   if aws dynamodb describe-table --table-name "${STATE_LOCK_TABLE_NAME}" >/dev/null 2>&1; then
     log "reusing lock table ${STATE_LOCK_TABLE_NAME}"
   else
@@ -1351,9 +1391,14 @@ phase5_get_or_create_lock_table () {
 phase5_put_ssm_params () {
   log "publishing /3am/* SSM parameters"
   _put_ssm () {
-    local name=$1 desc=$2 value=$3
-    aws ssm put-parameter --name "${name}" --description "${desc}" \
-      --type String --overwrite --value "${value}" >/dev/null
+    local name=$1 desc=$2 value=$3 type=${4:-String} key_id=${5:-}
+    if [ "${type}" = "SecureString" ] && [ -n "${key_id}" ]; then
+      aws ssm put-parameter --name "${name}" --description "${desc}" \
+        --type "${type}" --key-id "${key_id}" --overwrite --value "${value}" >/dev/null
+    else
+      aws ssm put-parameter --name "${name}" --description "${desc}" \
+        --type "${type}" --overwrite --value "${value}" >/dev/null
+    fi
   }
   _put_ssm /3am/kms/customer-cmk-arn  "ARN of the customer-managed CMK."  "${CUSTOMER_CMK_ARN}"
   _put_ssm /3am/kms/customer-cmk-id   "Key ID of the customer-managed CMK." "${CUSTOMER_CMK_KEY_ID}"

@@ -36,6 +36,7 @@ TRUST_POLICY_FILE="/tmp/3am-deployment-trust.json"
 PERMS_POLICY_FILE="/tmp/3am-deployment-permissions.json"
 PERMS_EC2_FILE="/tmp/3am-deployment-permissions-ec2.json"
 PERMS_EXTRA_FILE="/tmp/3am-deployment-permissions-extra.json"
+PERMS_ONBOARDING_FILE="/tmp/3am-deployment-permissions-onboarding.json"
 CMK_POLICY_FILE="/tmp/3am-customer-cmk-policy.json"
 STATE_BUCKET_POLICY_FILE="/tmp/3am-state-bucket-policy.json"
 DRIFT_TRUST_POLICY_FILE="/tmp/3am-drift-reader-trust.json"
@@ -682,18 +683,14 @@ phase5_compute_axelspire_arns () {
 # ---------------------------------------------------------------------------
 # Phase 5 — policy file generation (rewritten on every apply).
 # ---------------------------------------------------------------------------
+# SYNC: keep Phase 5 helpers through phase5_put_ssm_params identical in
+# customer-org-setup.sh (except ManagedBy tag strings and org-only wrappers).
+# Run _scripts/tests/test_phase5_bootstrap_parity.sh after edits.
 # Mirrors deploy/iam.tf, deploy/iam-permissions-ec2.tf,
 # deploy/iam-permissions-extra.tf, deploy/kms.tf and deploy/state-backend.tf.
 # Files are validated with python3 -m json.tool after generation.
 phase5_write_policy_files () {
-  local external_id="${1:-}" admin_arns_json="${2:-[]}" ext_block="" lic_block=""
-
-  if [ -n "${external_id}" ]; then
-    ext_block=$'\n        ,"StringEquals": {"sts:ExternalId": "'"${external_id}"$'"}'
-  fi
-  if ${REQUIRE_LICENSE_SESSION_TAG}; then
-    lic_block=$'\n        ,"StringEquals_LicenseTag": {"aws:RequestTag/LicenseValid": "true"}'
-  fi
+  local external_id="${1:-}" admin_arns_json="${2:-[]}"
   # Trust policy is split into two statements. sts:RoleSessionName and
   # sts:ExternalId are not valid context keys for sts:TagSession, so a
   # single combined statement would fail the condition check on every
@@ -732,11 +729,15 @@ phase5_write_policy_files () {
         ]
       }' > "${TRUST_POLICY_FILE}"
   else
-    # Minimal fallback: emit just the StringLike condition on AssumeRole
-    # and an unconditional TagSession. Operators without jq lose
-    # external-id / LicenseValid enforcement in the trust policy file;
-    # the SSM mirror still records the configured values for the
-    # operator to apply manually.
+    local assume_cond_json='{ "StringLike": { "sts:RoleSessionName": ["3am-*","tg-*"] } }'
+    if [ -n "${external_id}" ]; then
+      assume_cond_json="{ \"StringLike\": { \"sts:RoleSessionName\": [\"3am-*\",\"tg-*\"] }, \"StringEquals\": { \"sts:ExternalId\": \"${external_id}\" } }"
+    fi
+    local tag_stmt_tail=''
+    if ${REQUIRE_LICENSE_SESSION_TAG}; then
+      tag_stmt_tail=',
+    "Condition": { "StringEquals": { "aws:RequestTag/LicenseValid": "true" } }'
+    fi
     cat > "${TRUST_POLICY_FILE}" <<EOF
 {
   "Version": "2012-10-17",
@@ -746,13 +747,13 @@ phase5_write_policy_files () {
       "Effect": "Allow",
       "Principal": { "AWS": "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_ROLE_NAME}" },
       "Action": "sts:AssumeRole",
-      "Condition": { "StringLike": { "sts:RoleSessionName": ["3am-*","tg-*"] } }
+      "Condition": ${assume_cond_json}
     },
     {
       "Sid": "AllowAxelspireCITagSession",
       "Effect": "Allow",
       "Principal": { "AWS": "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_ROLE_NAME}" },
-      "Action": "sts:TagSession"
+      "Action": "sts:TagSession"${tag_stmt_tail}
     }
   ]
 }
@@ -859,6 +860,39 @@ EOF
 }
 EOF
 
+  log "writing ${PERMS_ONBOARDING_FILE}"
+  cat > "${PERMS_ONBOARDING_FILE}" <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "S3CreateAndManageAuditBucket", "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket","s3:DeleteBucket","s3:PutBucketAcl","s3:PutBucketPolicy",
+        "s3:PutBucketPublicAccessBlock","s3:PutBucketOwnershipControls","s3:PutBucketVersioning",
+        "s3:PutEncryptionConfiguration","s3:PutLifecycleConfiguration","s3:PutObjectLockConfiguration",
+        "s3:GetBucketAcl","s3:GetBucketPolicy","s3:GetBucketPublicAccessBlock","s3:GetBucketOwnershipControls",
+        "s3:GetBucketVersioning","s3:GetEncryptionConfiguration","s3:GetLifecycleConfiguration",
+        "s3:GetObjectLockConfiguration","s3:GetBucketLocation","s3:ListBucket","s3:ListBucketVersions",
+        "s3:GetObject","s3:GetObjectVersion","s3:PutObject","s3:DeleteObject"
+      ],
+      "Resource": [
+        "arn:${PARTITION}:s3:::3am-audit-${ACCOUNT_ID}-${DEPLOYMENT_REGION}",
+        "arn:${PARTITION}:s3:::3am-audit-${ACCOUNT_ID}-${DEPLOYMENT_REGION}/*"
+      ] },
+    { "Sid": "Route53CreateCustomerZone", "Effect": "Allow",
+      "Action": ["route53:CreateHostedZone","route53:DeleteHostedZone",
+                 "route53:ChangeTagsForResource","route53:ListTagsForResource"],
+      "Resource": ["*"] },
+    { "Sid": "SsmWriteOnboardingParameters", "Effect": "Allow",
+      "Action": ["ssm:PutParameter","ssm:DeleteParameter","ssm:DeleteParameters",
+                 "ssm:AddTagsToResource","ssm:RemoveTagsFromResource",
+                 "ssm:DescribeParameters","ssm:GetParameter","ssm:GetParameters",
+                 "ssm:GetParametersByPath"],
+      "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am/*"] }
+  ]
+}
+EOF
+
   log "writing ${CMK_POLICY_FILE}"
   # Customer admin role ARNs are passed in as a JSON array; the
   # AllowCustomerAdminsKeyManagement statement is omitted when empty
@@ -944,7 +978,7 @@ EOF
   if command -v python3 >/dev/null 2>&1; then
     local f
     for f in "${TRUST_POLICY_FILE}" "${PERMS_POLICY_FILE}" "${PERMS_EC2_FILE}" \
-             "${PERMS_EXTRA_FILE}" "${CMK_POLICY_FILE}" "${STATE_BUCKET_POLICY_FILE}"; do
+             "${PERMS_EXTRA_FILE}" "${PERMS_ONBOARDING_FILE}" "${CMK_POLICY_FILE}" "${STATE_BUCKET_POLICY_FILE}"; do
       python3 -m json.tool < "${f}" > /dev/null || die "generated ${f} is not valid JSON"
     done
   fi
@@ -992,6 +1026,9 @@ phase5_put_role_inline_policies () {
   aws iam put-role-policy --role-name "${DEPLOYMENT_ROLE_NAME}" \
     --policy-name ThreeAM-Deployment-Permissions-Extra \
     --policy-document "file://${PERMS_EXTRA_FILE}" >/dev/null
+  aws iam put-role-policy --role-name "${DEPLOYMENT_ROLE_NAME}" \
+    --policy-name ThreeAM-Deployment-Permissions-Onboarding \
+    --policy-document "file://${PERMS_ONBOARDING_FILE}" >/dev/null
 }
 
 # Read-only companion to ThreeAM-Deployment. Created during bootstrap so
