@@ -869,10 +869,10 @@ EOF
       "Action": [
         "s3:CreateBucket","s3:DeleteBucket","s3:PutBucketAcl","s3:PutBucketPolicy",
         "s3:PutBucketPublicAccessBlock","s3:PutBucketOwnershipControls","s3:PutBucketVersioning",
-        "s3:PutEncryptionConfiguration","s3:PutLifecycleConfiguration","s3:PutObjectLockConfiguration",
+        "s3:PutEncryptionConfiguration","s3:PutLifecycleConfiguration","s3:PutBucketObjectLockConfiguration",
         "s3:GetBucketAcl","s3:GetBucketPolicy","s3:GetBucketPublicAccessBlock","s3:GetBucketOwnershipControls",
         "s3:GetBucketVersioning","s3:GetEncryptionConfiguration","s3:GetLifecycleConfiguration",
-        "s3:GetObjectLockConfiguration","s3:GetBucketLocation","s3:ListBucket","s3:ListBucketVersions",
+        "s3:GetBucketObjectLockConfiguration","s3:GetBucketLocation","s3:ListBucket","s3:ListBucketVersions",
         "s3:GetObject","s3:GetObjectVersion","s3:PutObject","s3:DeleteObject"
       ],
       "Resource": [
