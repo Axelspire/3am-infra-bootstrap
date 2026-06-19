@@ -965,8 +965,11 @@ EOF
   "Version": "2012-10-17",
   "Statement": [
     { "Sid": "SsmReadOn3amParameters", "Effect": "Allow",
-      "Action": ["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","ssm:DescribeParameters"],
+      "Action": ["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath"],
       "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am/*"] },
+    { "Sid": "SsmDescribeParameters", "Effect": "Allow",
+      "Action": ["ssm:DescribeParameters"],
+      "Resource": ["*"] },
     { "Sid": "SsmWriteOn3amParameters", "Effect": "Allow",
       "Action": ["ssm:PutParameter","ssm:DeleteParameter","ssm:DeleteParameters",
                  "ssm:AddTagsToResource","ssm:RemoveTagsFromResource","ssm:LabelParameterVersion"],
@@ -1026,10 +1029,13 @@ EOF
       "Action": ["route53:CreateHostedZone","route53:DeleteHostedZone",
                  "route53:ChangeTagsForResource","route53:ListTagsForResource"],
       "Resource": ["*"] },
+    { "Sid": "SsmDescribeParametersForOnboarding", "Effect": "Allow",
+      "Action": ["ssm:DescribeParameters"],
+      "Resource": ["*"] },
     { "Sid": "SsmWriteOnboardingParameters", "Effect": "Allow",
       "Action": ["ssm:PutParameter","ssm:DeleteParameter","ssm:DeleteParameters",
                  "ssm:AddTagsToResource","ssm:RemoveTagsFromResource",
-                 "ssm:DescribeParameters","ssm:GetParameter","ssm:GetParameters",
+                 "ssm:GetParameter","ssm:GetParameters",
                  "ssm:GetParametersByPath"],
       "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am/*"] }
   ]
