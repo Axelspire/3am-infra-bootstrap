@@ -362,7 +362,11 @@ pre-filled from the JSON.
 form, not the bootstrap. Paste the printed command, fill those three,
 and run it. The workflow invokes `_scripts/customer-scaffold.sh`
 internally to render `customers/<id>/<region>/` and the CI key leaf,
-then opens a PR.
+then opens a PR. If you lost the printed command, two equivalent
+fallback patterns (jq-extraction from the JSON, and hand-built) are
+documented in
+[`3am-deployments/docs/CUSTOMER-ONBOARDING-OPS.md` §4](../../3am-deployments/docs/CUSTOMER-ONBOARDING-OPS.md#4-trigger-customer-onboardyml)
+as Option B and Option C.
 
 **c. Continue with `CUSTOMER-ONBOARDING-OPS.md` §4 onward** for PR
 review and the `platform-deploy` apply that creates the per-customer

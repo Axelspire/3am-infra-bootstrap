@@ -1223,6 +1223,27 @@ omits `sts:TagSession`. The deploy chain in
          "Effect": "Allow",
          "Action": "secretsmanager:GetSecretValue",
          "Resource": "arn:aws:secretsmanager:*:033113129683:secret:/3am/license/external-id/*"
+       },
+       {
+         "Sid": "ReadEnvDnsZoneSsm",
+         "Effect": "Allow",
+         "Action": "ssm:GetParameter",
+         "Resource": "arn:aws:ssm:eu-west-1:033113129683:parameter/3am/dns/env-zones/*"
+       },
+       {
+         "Sid": "DelegateCustomerSubzones",
+         "Effect": "Allow",
+         "Action": [
+           "route53:ChangeResourceRecordSets",
+           "route53:GetChange"
+         ],
+         "Resource": "arn:aws:route53:::hostedzone/*"
+       },
+       {
+         "Sid": "WritePendingApprovalHashes",
+         "Effect": "Allow",
+         "Action": "ssm:PutParameter",
+         "Resource": "arn:aws:ssm:eu-west-1:033113129683:parameter/3am/pending-approvals/*"
        }
      ]
    }
@@ -1240,7 +1261,7 @@ aws iam list-role-policies --role-name GitHubActions-CustomerDeploy
 
 Expect `arn:aws:iam::033113129683:role/GitHubActions-CustomerDeploy`
 and `customer-deploy-permissions` in the inline policies list. To
-confirm all six statement Sids are present:
+confirm all nine statement Sids are present:
 
 ```sh
 aws iam get-role-policy \
@@ -1249,7 +1270,19 @@ aws iam get-role-policy \
   --query 'PolicyDocument.Statement[].Sid'
 # expect: ["AssumeCustomerDeploymentRole","TagCustomerDeploymentSession",
 #          "ReadWriteCustomerState","LockCustomerState","UseAxelspireCiKeys",
-#          "ReadCustomerExternalId"]
+#          "ReadCustomerExternalId","ReadEnvDnsZoneSsm",
+#          "DelegateCustomerSubzones","WritePendingApprovalHashes"]
+```
+
+**Already provisioned with the original six-statement policy?** Replace the
+inline policy in place (same name `customer-deploy-permissions`):
+
+```sh
+# Save the full JSON from Step 4 above to customer-deploy-permissions.json, then:
+aws iam put-role-policy \
+  --role-name GitHubActions-CustomerDeploy \
+  --policy-name customer-deploy-permissions \
+  --policy-document file://customer-deploy-permissions.json
 ```
 
 Customer-side `apply` runs can now proceed.
