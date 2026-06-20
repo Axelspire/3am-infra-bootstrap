@@ -115,6 +115,13 @@ chmod +x single-account-setup.sh
 ./single-account-setup.sh outputs-json > org-setup.json
 ```
 
+On every run (before `apply`, `preflight`, or `outputs`), the script checks
+`main` on GitHub for a newer `BOOTSTRAP_VERSION`. When one exists it downloads
+the update, replaces the local copy (or `$HOME/<script-name>` when invoked via
+`curl … | bash`), and re-runs with the same arguments — no manual re-download.
+Use `--skip-self-update` or `SKIP_SELF_UPDATE=1` to disable. Override the
+source with `BOOTSTRAP_GIT_REF` (default `main`).
+
 `--allowed-regions` (CSV, default `eu-west-1,us-east-1`) is the
 parameter for the `3am-region-deny` SCP. Anything not in the list is
 denied for non-global services; IAM, Organizations, Route 53,

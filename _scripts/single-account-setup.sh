@@ -20,9 +20,29 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.0"
+BOOTSTRAP_VERSION="0.2.1"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-06-19"
+BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
+BOOTSTRAP_REPO="${BOOTSTRAP_REPO:-Axelspire/3am-infra-bootstrap}"
+BOOTSTRAP_GIT_REF="${BOOTSTRAP_GIT_REF:-main}"
+SKIP_SELF_UPDATE=false
+
+_bootstrap_self_update_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${_bootstrap_self_update_dir}/bootstrap-self-update.inc.sh" ]]; then
+  # shellcheck source=bootstrap-self-update.inc.sh
+  source "${_bootstrap_self_update_dir}/bootstrap-self-update.inc.sh"
+elif command -v curl >/dev/null 2>&1; then
+  _bootstrap_self_update_inc="$(mktemp)"
+  if curl -fsSL --connect-timeout 10 --max-time 45 \
+    "https://raw.githubusercontent.com/${BOOTSTRAP_REPO}/${BOOTSTRAP_GIT_REF}/_scripts/bootstrap-self-update.inc.sh" \
+    -o "${_bootstrap_self_update_inc}" 2>/dev/null; then
+    # shellcheck source=/dev/null
+    source "${_bootstrap_self_update_inc}"
+  fi
+  rm -f "${_bootstrap_self_update_inc}"
+fi
+unset _bootstrap_self_update_dir _bootstrap_self_update_inc
 
 # ---------------------------------------------------------------------------
 # Defaults & globals
@@ -221,6 +241,9 @@ Phase 5 tuning (defaults are correct for the standard AxelSpire setup):
   --auto-approve                Skip interactive confirmation.
   --log-dir PATH                Default: $HOME (CloudShell-persistent).
   --quiet                       Reduce console noise (file log is full).
+  --skip-self-update            Do not check GitHub for a newer script
+                                (also: SKIP_SELF_UPDATE=1 or
+                                BOOTSTRAP_SELF_UPDATE_REEXEC=1).
 
 Outputs commands take no per-customer flags; they re-resolve every value
 from AWS using the group / permission-set / role names.
@@ -275,6 +298,7 @@ parse_args () {
       --auto-approve)              AUTO_APPROVE=true; shift ;;
       --log-dir)                   LOG_DIR="$2"; shift 2 ;;
       --quiet)                     QUIET=true; shift ;;
+      --skip-self-update)          SKIP_SELF_UPDATE=true; shift ;;
       -h|--help)                   usage; exit 0 ;;
       *) die "unknown argument: $1 (try --help)" ;;
     esac
@@ -1905,6 +1929,10 @@ do_outputs_json () {
 main () {
   if [ $# -eq 0 ]; then usage; exit 0; fi
   INVOCATION_ARGV=( "$@" )
+  if declare -F bootstrap_maybe_self_update >/dev/null 2>&1; then
+    BOOTSTRAP_SCRIPT_PATH="${BASH_SOURCE[0]}"
+    bootstrap_maybe_self_update "$@"
+  fi
   parse_args "$@"
   case "${COMMAND}" in
     help|--help|-h) usage; exit 0 ;;
