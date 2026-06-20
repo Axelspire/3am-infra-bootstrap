@@ -28,6 +28,7 @@ PERMS_POLICY_FILE="/tmp/3am-deployment-permissions.json"
 PERMS_EC2_FILE="/tmp/3am-deployment-permissions-ec2.json"
 PERMS_EXTRA_FILE="/tmp/3am-deployment-permissions-extra.json"
 PERMS_ONBOARDING_FILE="/tmp/3am-deployment-permissions-onboarding.json"
+PERMS_INFRA_FILE="/tmp/3am-deployment-permissions-infra.json"
 CMK_POLICY_FILE="/tmp/3am-customer-cmk-policy.json"
 STATE_BUCKET_POLICY_FILE="/tmp/3am-state-bucket-policy.json"
 DRIFT_TRUST_POLICY_FILE="/tmp/3am-drift-reader-trust.json"
@@ -1043,6 +1044,68 @@ EOF
 }
 EOF
 
+  log "writing ${PERMS_INFRA_FILE}"
+  cat > "${PERMS_INFRA_FILE}" <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "SsmReadOn3amInfraParameters", "Effect": "Allow",
+      "Action": ["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath"],
+      "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am-infra/*"] },
+    { "Sid": "SsmWriteOn3amInfraParameters", "Effect": "Allow",
+      "Action": ["ssm:PutParameter","ssm:DeleteParameter","ssm:DeleteParameters",
+                 "ssm:AddTagsToResource","ssm:RemoveTagsFromResource","ssm:ListTagsForResource",
+                 "ssm:LabelParameterVersion"],
+      "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am-infra/*"] },
+    { "Sid": "Ec2NetworkingCreateWith3amTag", "Effect": "Allow",
+      "Action": ["ec2:CreateVpc","ec2:CreateSubnet","ec2:CreateInternetGateway","ec2:CreateRouteTable",
+                 "ec2:CreateRoute","ec2:AllocateAddress","ec2:CreateNatGateway","ec2:CreateVpcEndpoint",
+                 "ec2:CreateManagedPrefixList","ec2:CreateSecurityGroup","ec2:CreateTags"],
+      "Resource": ["*"],
+      "Condition": { "StringEquals": { "aws:RequestTag/Service": "3am" } } },
+    { "Sid": "Ec2NetworkingManageTagged", "Effect": "Allow",
+      "Action": ["ec2:DeleteVpc","ec2:ModifyVpcAttribute","ec2:DeleteSubnet","ec2:ModifySubnetAttribute",
+                 "ec2:DeleteInternetGateway","ec2:AttachInternetGateway","ec2:DetachInternetGateway",
+                 "ec2:DeleteRouteTable","ec2:CreateRoute","ec2:DeleteRoute","ec2:ReplaceRoute",
+                 "ec2:AssociateRouteTable","ec2:DisassociateRouteTable","ec2:ReleaseAddress",
+                 "ec2:DeleteNatGateway","ec2:DeleteVpcEndpoints","ec2:ModifyVpcEndpoint",
+                 "ec2:ModifyManagedPrefixList","ec2:DeleteManagedPrefixList",
+                 "ec2:AuthorizeSecurityGroupIngress","ec2:AuthorizeSecurityGroupEgress",
+                 "ec2:RevokeSecurityGroupIngress","ec2:RevokeSecurityGroupEgress",
+                 "ec2:DeleteSecurityGroup","ec2:CreateTags","ec2:DeleteTags"],
+      "Resource": ["*"],
+      "Condition": { "StringEquals": { "aws:ResourceTag/Service": "3am" } } },
+    { "Sid": "IamManage3amScopedPoliciesAndRoles", "Effect": "Allow",
+      "Action": ["iam:CreatePolicy","iam:DeletePolicy","iam:GetPolicy","iam:GetPolicyVersion",
+                 "iam:CreatePolicyVersion","iam:DeletePolicyVersion","iam:ListPolicyVersions",
+                 "iam:TagPolicy","iam:UntagPolicy","iam:ListPolicyTags",
+                 "iam:CreateRole","iam:DeleteRole","iam:GetRole","iam:UpdateRole","iam:PassRole",
+                 "iam:AttachRolePolicy","iam:DetachRolePolicy","iam:PutRolePolicy","iam:DeleteRolePolicy",
+                 "iam:GetRolePolicy","iam:TagRole","iam:UntagRole","iam:ListRoleTags",
+                 "iam:ListAttachedRolePolicies","iam:ListRolePolicies"],
+      "Resource": ["arn:${PARTITION}:iam::${ACCOUNT_ID}:policy/3am-*",
+                   "arn:${PARTITION}:iam::${ACCOUNT_ID}:role/3am-*"] },
+    { "Sid": "EventsOn3amRules", "Effect": "Allow",
+      "Action": ["events:PutRule","events:DeleteRule","events:DescribeRule","events:EnableRule",
+                 "events:DisableRule","events:PutTargets","events:RemoveTargets","events:ListTargetsByRule",
+                 "events:TagResource","events:UntagResource","events:ListTagsForResource"],
+      "Resource": ["arn:${PARTITION}:events:*:${ACCOUNT_ID}:rule/3am-*"] },
+    { "Sid": "KmsCreate3amTaggedKeys", "Effect": "Allow",
+      "Action": ["kms:CreateKey","kms:TagResource"],
+      "Resource": ["*"],
+      "Condition": { "StringEquals": { "aws:RequestTag/Service": "3am" } } },
+    { "Sid": "KmsManage3amTaggedKeys", "Effect": "Allow",
+      "Action": ["kms:CreateAlias","kms:DeleteAlias","kms:UpdateAlias","kms:PutKeyPolicy","kms:GetKeyPolicy",
+                 "kms:EnableKeyRotation","kms:DisableKey","kms:EnableKey","kms:ScheduleKeyDeletion",
+                 "kms:CancelKeyDeletion","kms:UntagResource","kms:ListResourceTags",
+                 "kms:Encrypt","kms:Decrypt","kms:ReEncryptFrom","kms:ReEncryptTo",
+                 "kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext","kms:DescribeKey"],
+      "Resource": ["*"],
+      "Condition": { "StringEquals": { "aws:ResourceTag/Service": "3am" } } }
+  ]
+}
+EOF
+
   log "writing ${CMK_POLICY_FILE}"
   if [ "${admin_arns_json}" = "[]" ] || [ -z "${admin_arns_json}" ]; then
     cat > "${CMK_POLICY_FILE}" <<EOF
@@ -1147,7 +1210,7 @@ EOF
   if command -v python3 >/dev/null 2>&1; then
     local f
     for f in "${TRUST_POLICY_FILE}" "${PERMS_POLICY_FILE}" "${PERMS_EC2_FILE}" \
-             "${PERMS_EXTRA_FILE}" "${PERMS_ONBOARDING_FILE}" "${CMK_POLICY_FILE}" "${STATE_BUCKET_POLICY_FILE}"; do
+             "${PERMS_EXTRA_FILE}" "${PERMS_ONBOARDING_FILE}" "${PERMS_INFRA_FILE}" "${CMK_POLICY_FILE}" "${STATE_BUCKET_POLICY_FILE}"; do
       python3 -m json.tool < "${f}" > /dev/null || die "generated ${f} is not valid JSON"
     done
   fi
@@ -1197,6 +1260,9 @@ phase5_put_role_inline_policies () {
   aws iam put-role-policy --role-name "${DEPLOYMENT_ROLE_NAME}" \
     --policy-name ThreeAM-Deployment-Permissions-Onboarding \
     --policy-document "file://${PERMS_ONBOARDING_FILE}" >/dev/null
+  aws iam put-role-policy --role-name "${DEPLOYMENT_ROLE_NAME}" \
+    --policy-name ThreeAM-Deployment-Permissions-Infra \
+    --policy-document "file://${PERMS_INFRA_FILE}" >/dev/null
 }
 
 phase5_write_drift_reader_policy_files () {
