@@ -82,13 +82,19 @@ Three inline policies, all attached to the same role.
 
 ### `ThreeAM-Deployment-Permissions-Extra` [`iam-permissions-extra.tf`]
 
-- SSM read/write on `/3am/*` parameters only (`DescribeParameters` on
-  `Resource: "*"`; `ListTagsForResource` on parameter ARNs).
+- SSM read/write on `/3am*` parameters (`/3am/bootstrap`, `/3am-infra/*`,
+  `/3am-internal/*`, `/3am-core/*`, …). `DescribeParameters` on `Resource: "*"`.
 - CloudWatch Logs on `/aws/lambda/3am-*` and `/3am/*` log groups only.
 - API Gateway full CRUD on resources tagged `Service=3am`.
 - Route 53: `route53:*` read; `route53:Change*` on hosted zones (infra APIGW/ACM validation records).
 - ACM: list and request anywhere; describe/delete/tag on certificates
   tagged `Service=3am`.
+
+### `ThreeAM-Deployment-Permissions-Apps` [`iam-permissions-apps.tf`]
+
+- IAM read on AWS-managed policies (`iam:GetPolicy*` on `arn:aws:iam::aws:policy/*`).
+- Lambda full access on all functions in the account (app stacks use `pki-*`, `authorizer-*`, …).
+- IAM full access on customer `role/*` and `policy/*` (Lambda execution roles).
 
 ## 4. CMK policy walkthrough
 

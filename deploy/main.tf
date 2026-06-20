@@ -1,7 +1,8 @@
 # Module entrypoint: locals, data sources, common tags.
 #
 # Resources live in the resource-specific files: kms.tf, iam.tf,
-# iam-permissions-ec2.tf, iam-permissions-extra.tf, iam-permissions-infra.tf, state-backend.tf,
+# iam-permissions-ec2.tf, iam-permissions-extra.tf, iam-permissions-infra.tf,
+# iam-permissions-apps.tf, state-backend.tf,
 # ssm.tf.
 
 data "aws_caller_identity" "current" {}

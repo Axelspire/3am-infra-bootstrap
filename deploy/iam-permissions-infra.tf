@@ -9,13 +9,6 @@ resource "aws_iam_role_policy" "three_am_deployment_infra" {
 }
 
 data "aws_iam_policy_document" "deployment_permissions_infra" {
-  statement {
-    sid       = "SsmOn3amInfraParameters"
-    effect    = "Allow"
-    actions   = ["ssm:*"]
-    resources = ["arn:${local.partition}:ssm:*:${local.account_id}:parameter/3am-infra/*"]
-  }
-
   # Infra VPC apply uses inline routes, IGW attach, NACL association, and
   # flow logs where tag-based authorization does not match (default NACL,
   # route-table routes, etc.). Scoped to this inline policy only.

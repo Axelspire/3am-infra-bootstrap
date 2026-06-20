@@ -20,7 +20,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.8"
+BOOTSTRAP_VERSION="0.2.9"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-06-20"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
@@ -58,6 +58,7 @@ PERMS_EC2_FILE="/tmp/3am-deployment-permissions-ec2.json"
 PERMS_EXTRA_FILE="/tmp/3am-deployment-permissions-extra.json"
 PERMS_ONBOARDING_FILE="/tmp/3am-deployment-permissions-onboarding.json"
 PERMS_INFRA_FILE="/tmp/3am-deployment-permissions-infra.json"
+PERMS_APPS_FILE="/tmp/3am-deployment-permissions-apps.json"
 CMK_POLICY_FILE="/tmp/3am-customer-cmk-policy.json"
 STATE_BUCKET_POLICY_FILE="/tmp/3am-state-bucket-policy.json"
 DRIFT_TRUST_POLICY_FILE="/tmp/3am-drift-reader-trust.json"
@@ -717,7 +718,7 @@ phase5_compute_axelspire_arns () {
 phase5_assert_inline_policy_sizes () {
   local max=10240 f bytes
   for f in "${PERMS_POLICY_FILE}" "${PERMS_EC2_FILE}" "${PERMS_EXTRA_FILE}" \
-           "${PERMS_ONBOARDING_FILE}" "${PERMS_INFRA_FILE}"; do
+           "${PERMS_ONBOARDING_FILE}" "${PERMS_INFRA_FILE}" "${PERMS_APPS_FILE}"; do
     bytes=$(wc -c < "${f}" | tr -d ' ')
     if [ "${bytes}" -gt "${max}" ]; then
       die "inline policy ${f} is ${bytes} bytes (AWS PutRolePolicy limit ${max}) — split or shorten statements"
@@ -857,7 +858,7 @@ EOF
   "Statement": [
     { "Sid": "SsmOn3amParameters", "Effect": "Allow",
       "Action": ["ssm:*"],
-      "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am/*"] },
+      "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am*"] },
     { "Sid": "SsmDescribeParameters", "Effect": "Allow",
       "Action": ["ssm:DescribeParameters"],
       "Resource": ["*"] },
@@ -923,7 +924,7 @@ EOF
                  "ssm:AddTagsToResource","ssm:RemoveTagsFromResource","ssm:ListTagsForResource",
                  "ssm:GetParameter","ssm:GetParameters",
                  "ssm:GetParametersByPath"],
-      "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am/*"] }
+      "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am*"] }
   ]
 }
 EOF
@@ -933,9 +934,6 @@ EOF
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Sid": "SsmOn3amInfraParameters", "Effect": "Allow",
-      "Action": ["ssm:*"],
-      "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am-infra/*"] },
     { "Sid": "Ec2InfraVpc", "Effect": "Allow",
       "Action": ["ec2:*"],
       "Resource": ["*"] },
@@ -960,6 +958,25 @@ EOF
       "Action": ["kms:*"],
       "Resource": ["arn:${PARTITION}:kms:*:${ACCOUNT_ID}:alias/3am-*",
                    "arn:${PARTITION}:kms:*:${ACCOUNT_ID}:key/*"] }
+  ]
+}
+EOF
+
+  log "writing ${PERMS_APPS_FILE}"
+  cat > "${PERMS_APPS_FILE}" <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "IamReadAwsManagedPolicies", "Effect": "Allow",
+      "Action": ["iam:GetPolicy","iam:GetPolicyVersion","iam:ListPolicyVersions"],
+      "Resource": ["arn:${PARTITION}:iam::aws:policy/*"] },
+    { "Sid": "LambdaOnAppFunctions", "Effect": "Allow",
+      "Action": ["lambda:*"],
+      "Resource": ["arn:${PARTITION}:lambda:*:${ACCOUNT_ID}:function:*"] },
+    { "Sid": "IamManageAppStackRolesAndPolicies", "Effect": "Allow",
+      "Action": ["iam:*"],
+      "Resource": ["arn:${PARTITION}:iam::${ACCOUNT_ID}:role/*",
+                   "arn:${PARTITION}:iam::${ACCOUNT_ID}:policy/*"] }
   ]
 }
 EOF
@@ -1073,7 +1090,8 @@ EOF
   if command -v python3 >/dev/null 2>&1; then
     local f
     for f in "${TRUST_POLICY_FILE}" "${PERMS_POLICY_FILE}" "${PERMS_EC2_FILE}" \
-             "${PERMS_EXTRA_FILE}" "${PERMS_ONBOARDING_FILE}" "${PERMS_INFRA_FILE}" "${CMK_POLICY_FILE}" "${STATE_BUCKET_POLICY_FILE}"; do
+             "${PERMS_EXTRA_FILE}" "${PERMS_ONBOARDING_FILE}" "${PERMS_INFRA_FILE}" \
+             "${PERMS_APPS_FILE}" "${CMK_POLICY_FILE}" "${STATE_BUCKET_POLICY_FILE}"; do
       python3 -m json.tool < "${f}" > /dev/null || die "generated ${f} is not valid JSON"
     done
   fi
@@ -1127,6 +1145,9 @@ phase5_put_role_inline_policies () {
   aws iam put-role-policy --role-name "${DEPLOYMENT_ROLE_NAME}" \
     --policy-name ThreeAM-Deployment-Permissions-Infra \
     --policy-document "file://${PERMS_INFRA_FILE}" >/dev/null
+  aws iam put-role-policy --role-name "${DEPLOYMENT_ROLE_NAME}" \
+    --policy-name ThreeAM-Deployment-Permissions-Apps \
+    --policy-document "file://${PERMS_APPS_FILE}" >/dev/null
 }
 
 # Read-only companion to ThreeAM-Deployment. Created during bootstrap so

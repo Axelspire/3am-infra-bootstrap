@@ -22,7 +22,7 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
     sid       = "SsmOn3amParameters"
     effect    = "Allow"
     actions   = ["ssm:*"]
-    resources = ["arn:${local.partition}:ssm:*:${local.account_id}:parameter/3am/*"]
+    resources = ["arn:${local.partition}:ssm:*:${local.account_id}:parameter/3am*"]
   }
 
   statement {
