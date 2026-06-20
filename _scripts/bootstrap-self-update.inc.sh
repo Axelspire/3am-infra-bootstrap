@@ -104,6 +104,7 @@ bootstrap_maybe_self_update () {
     exec /usr/bin/env bash "${install_path}" "$@"
   fi
 
+  bootstrap_su_log "local ${BOOTSTRAP_VERSION} is current (remote ${remote_version} on ${BOOTSTRAP_GIT_REF:-main})"
   rm -f "${tmp}"
   return 0
 }
