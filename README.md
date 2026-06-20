@@ -981,10 +981,16 @@ cat > /tmp/perms-extra.json <<EOF
       "Resource":"arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am/*"
     },
     {
+      "Sid":"LogsDescribeLogGroups","Effect":"Allow",
+      "Action":["logs:DescribeLogGroups"],
+      "Resource":["*"]
+    },
+    {
       "Sid":"LogsOn3amGroups","Effect":"Allow",
       "Action":["logs:CreateLogGroup","logs:CreateLogStream","logs:DeleteLogGroup",
-                "logs:DescribeLogGroups","logs:DescribeLogStreams","logs:PutLogEvents",
-                "logs:PutRetentionPolicy","logs:TagResource","logs:UntagResource","logs:AssociateKmsKey"],
+                "logs:DescribeLogStreams","logs:PutLogEvents",
+                "logs:PutRetentionPolicy","logs:TagResource","logs:UntagResource",
+                "logs:ListTagsForResource","logs:AssociateKmsKey"],
       "Resource":[
         "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/3am-*",
         "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/3am-*:*",

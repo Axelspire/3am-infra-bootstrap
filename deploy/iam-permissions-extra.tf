@@ -79,6 +79,7 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
       "logs:PutRetentionPolicy",
       "logs:TagResource",
       "logs:UntagResource",
+      "logs:ListTagsForResource",
       "logs:AssociateKmsKey",
     ]
     resources = [
