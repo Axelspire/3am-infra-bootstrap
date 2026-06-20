@@ -27,7 +27,11 @@ bootstrap_su_version_sortable () {
 }
 
 bootstrap_su_version_gt () {
-  [[ "$(bootstrap_su_version_sortable "$1")" -gt "$(bootstrap_su_version_sortable "$2")" ]]
+  local a b
+  a="$(bootstrap_su_version_sortable "$1")"
+  b="$(bootstrap_su_version_sortable "$2")"
+  # Zero-padded sort keys look octal to [[ -gt ]]; force base-10 (patch 8/9 safe).
+  [[ $((10#${a})) -gt $((10#${b})) ]]
 }
 
 bootstrap_su_remote_url () {
