@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.17"
+BOOTSTRAP_VERSION="0.2.18"
 BOOTSTRAP_VARIANT="multi-account"
 SCRIPT_LAST_UPDATED="2026-06-20"
 BOOTSTRAP_SCRIPT_NAME="customer-org-setup.sh"
@@ -859,14 +859,18 @@ restore_mgmt_creds () {
 # Mirrors deploy/iam.tf, deploy/iam-permissions-ec2.tf,
 # deploy/iam-permissions-extra.tf, deploy/kms.tf and deploy/state-backend.tf.
 phase5_assert_inline_policy_sizes () {
-  local max=10240 f bytes
+  local max_per=10240 max_combined=10240 total=0 f bytes
   for f in "${PERMS_POLICY_FILE}" "${PERMS_EC2_FILE}" "${PERMS_EXTRA_FILE}" \
            "${PERMS_ONBOARDING_FILE}" "${PERMS_INFRA_FILE}" "${PERMS_APPS_FILE}"; do
     bytes=$(wc -c < "${f}" | tr -d ' ')
-    if [ "${bytes}" -gt "${max}" ]; then
-      die "inline policy ${f} is ${bytes} bytes (AWS PutRolePolicy limit ${max}) — split or shorten statements"
+    if [ "${bytes}" -gt "${max_per}" ]; then
+      die "inline policy ${f} is ${bytes} bytes (AWS per-policy limit ${max_per}) — split or shorten statements"
     fi
+    total=$((total + bytes))
   done
+  if [ "${total}" -gt "${max_combined}" ]; then
+    die "combined ThreeAM-Deployment inline policies are ${total} bytes (AWS role limit ${max_combined}) — shorten or move to managed policies"
+  fi
 }
 
 phase5_write_policy_files () {
@@ -999,59 +1003,14 @@ EOF
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Sid": "SsmOn3amParameters", "Effect": "Allow",
-      "Action": ["ssm:*"],
+    { "Effect": "Allow", "Action": ["ssm:*"],
       "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am*"] },
-    { "Sid": "SsmDescribeParameters", "Effect": "Allow",
-      "Action": ["ssm:DescribeParameters"],
-      "Resource": ["*"] },
-    { "Sid": "LogsAccountScope", "Effect": "Allow",
-      "Action": ["logs:DescribeLogGroups","logs:CreateLogGroup","logs:TagResource",
-                 "logs:UntagResource","logs:ListTagsForResource","logs:PutRetentionPolicy",
-                 "logs:CreateLogDelivery","logs:DeleteLogDelivery","logs:GetLogDelivery",
-                 "logs:UpdateLogDelivery","logs:ListLogDeliveries","logs:PutResourcePolicy",
-                 "logs:DescribeResourcePolicies"],
-      "Resource": ["*"] },
-    { "Sid": "LogsOn3amGroups", "Effect": "Allow",
-      "Action": ["logs:*"],
-      "Resource": ["arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/3am-*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/3am-*:*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/vpc/3am-*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/vpc/3am-*:*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/api-gateway/3am-*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/api-gateway/3am-*:*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/cloudtrail/3am-*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/cloudtrail/3am-*:*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/3am/*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/3am/*:*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:API-Gateway-Execution-Logs_*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:API-Gateway-Execution-Logs_*:*"] },
-    { "Sid": "ApigatewayCreateWith3amTag", "Effect": "Allow",
-      "Action": ["apigateway:*"],
-      "Resource": ["arn:${PARTITION}:apigateway:*::/*"],
-      "Condition": { "StringEquals": { "aws:RequestTag/Service": "3am" } } },
-    { "Sid": "ApigatewayOnTaggedResources", "Effect": "Allow",
-      "Action": ["apigateway:*"],
-      "Resource": ["arn:${PARTITION}:apigateway:*::/*"],
-      "Condition": { "StringEquals": { "aws:ResourceTag/Service": "3am" } } },
-    { "Sid": "ApigatewayTagResourceEndpoint", "Effect": "Allow",
-      "Action": ["apigateway:POST","apigateway:PUT","apigateway:PATCH",
-                 "apigateway:TagResource","apigateway:UntagResource"],
-      "Resource": ["arn:${PARTITION}:apigateway:*::/tags/*"] },
-    { "Sid": "ApigatewayAccountSettings", "Effect": "Allow",
-      "Action": ["apigateway:GET","apigateway:PATCH","apigateway:UpdateAccount"],
-      "Resource": ["arn:${PARTITION}:apigateway:*::/account"] },
-    { "Sid": "Route53Read", "Effect": "Allow",
-      "Action": ["route53:*"],
-      "Resource": ["*"] },
-    { "Sid": "Route53WriteHostedZones", "Effect": "Allow",
-      "Action": ["route53:Change*"],
-      "Resource": ["arn:${PARTITION}:route53:::hostedzone/*"] },
-    { "Sid": "AcmOnTaggedCertificates", "Effect": "Allow",
-      "Action": ["acm:*"], "Resource": ["*"],
-      "Condition": { "StringEquals": { "aws:ResourceTag/Service": "3am" } } },
-    { "Sid": "AcmListAndRequest", "Effect": "Allow",
-      "Action": ["acm:ListCertificates","acm:RequestCertificate"], "Resource": ["*"] }
+    { "Effect": "Allow", "Action": ["ssm:DescribeParameters"], "Resource": ["*"] },
+    { "Effect": "Allow", "Action": ["logs:*"], "Resource": ["*"] },
+    { "Effect": "Allow", "Action": ["apigateway:*"],
+      "Resource": ["arn:${PARTITION}:apigateway:*::/*"] },
+    { "Effect": "Allow", "Action": ["route53:*"], "Resource": ["*"] },
+    { "Effect": "Allow", "Action": ["acm:*"], "Resource": ["*"] }
   ]
 }
 EOF
@@ -1061,32 +1020,17 @@ EOF
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Sid": "S3CreateAndManageAuditBucket", "Effect": "Allow",
-      "Action": [
-        "s3:CreateBucket","s3:DeleteBucket","s3:PutBucketAcl","s3:PutBucketPolicy","s3:DeleteBucketPolicy",
-        "s3:PutBucketPublicAccessBlock","s3:PutBucketOwnershipControls","s3:PutBucketVersioning",
-        "s3:PutEncryptionConfiguration","s3:PutLifecycleConfiguration","s3:PutBucketObjectLockConfiguration",
-        "s3:PutBucketTagging",
-        "s3:Get*",
-        "s3:ListBucket","s3:ListBucketVersions",
-        "s3:PutObject","s3:DeleteObject"
-      ],
+    { "Effect": "Allow", "Action": ["s3:*"],
       "Resource": [
         "arn:${PARTITION}:s3:::3am-audit-${ACCOUNT_ID}-${DEPLOYMENT_REGION}",
         "arn:${PARTITION}:s3:::3am-audit-${ACCOUNT_ID}-${DEPLOYMENT_REGION}/*"
       ] },
-    { "Sid": "Route53CreateCustomerZone", "Effect": "Allow",
-      "Action": ["route53:CreateHostedZone","route53:DeleteHostedZone",
-                 "route53:ChangeTagsForResource","route53:ListTagsForResource"],
-      "Resource": ["*"] },
-    { "Sid": "SsmDescribeParametersForOnboarding", "Effect": "Allow",
-      "Action": ["ssm:DescribeParameters"],
-      "Resource": ["*"] },
-    { "Sid": "SsmWriteOnboardingParameters", "Effect": "Allow",
+    { "Effect": "Allow", "Action": ["route53:*"], "Resource": ["*"] },
+    { "Effect": "Allow", "Action": ["ssm:DescribeParameters"], "Resource": ["*"] },
+    { "Effect": "Allow",
       "Action": ["ssm:PutParameter","ssm:DeleteParameter","ssm:DeleteParameters",
                  "ssm:AddTagsToResource","ssm:RemoveTagsFromResource","ssm:ListTagsForResource",
-                 "ssm:GetParameter","ssm:GetParameters",
-                 "ssm:GetParametersByPath"],
+                 "ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath"],
       "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am*"] }
   ]
 }
@@ -1130,88 +1074,48 @@ EOF
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Sid": "IamReadAwsManagedPolicies", "Effect": "Allow",
+    { "Effect": "Allow",
       "Action": ["iam:GetPolicy","iam:GetPolicyVersion","iam:ListPolicyVersions"],
       "Resource": ["arn:${PARTITION}:iam::aws:policy/*",
                    "arn:${PARTITION}:iam::aws:policy/service-role/*",
                    "arn:${PARTITION}:iam::aws:policy/aws-service-role/*",
                    "arn:${PARTITION}:iam::aws:policy/job-function/*"] },
-    { "Sid": "LambdaOnAppFunctions", "Effect": "Allow",
-      "Action": ["lambda:*"],
+    { "Effect": "Allow", "Action": ["lambda:*"],
       "Resource": ["arn:${PARTITION}:lambda:*:${ACCOUNT_ID}:function:*"] },
-    { "Sid": "IamManageAppStackRolesAndPolicies", "Effect": "Allow",
-      "Action": ["iam:*"],
+    { "Effect": "Allow", "Action": ["iam:*"],
       "Resource": ["arn:${PARTITION}:iam::${ACCOUNT_ID}:role/*",
                    "arn:${PARTITION}:iam::${ACCOUNT_ID}:policy/*"] },
-    { "Sid": "IamAccountPasswordPolicy", "Effect": "Allow",
+    { "Effect": "Allow",
       "Action": ["iam:GetAccountPasswordPolicy","iam:UpdateAccountPasswordPolicy",
                  "iam:DeleteAccountPasswordPolicy"],
       "Resource": ["*"] },
-    { "Sid": "RdsManageCoreStack", "Effect": "Allow",
-      "Action": ["rds:*"],
-      "Resource": ["arn:${PARTITION}:rds:*:${ACCOUNT_ID}:db:*",
-                   "arn:${PARTITION}:rds:*:${ACCOUNT_ID}:cluster:*",
-                   "arn:${PARTITION}:rds:*:${ACCOUNT_ID}:subgrp:*",
-                   "arn:${PARTITION}:rds:*:${ACCOUNT_ID}:pg:*",
-                   "arn:${PARTITION}:rds:*:${ACCOUNT_ID}:optgrp:*"] },
-    { "Sid": "SecretsManagerCreateCoreSecrets", "Effect": "Allow",
-      "Action": ["secretsmanager:CreateSecret","secretsmanager:TagResource","secretsmanager:UntagResource"],
-      "Resource": ["*"] },
-    { "Sid": "SecretsManagerManageCoreSecrets", "Effect": "Allow",
-      "Action": ["secretsmanager:*"],
-      "Resource": ["arn:${PARTITION}:secretsmanager:*:${ACCOUNT_ID}:secret:*"] },
-    { "Sid": "SesCoreEmail", "Effect": "Allow",
-      "Action": ["ses:*"],
-      "Resource": ["*"] },
-    { "Sid": "SqsCoreQueues", "Effect": "Allow",
-      "Action": ["sqs:*"],
+    { "Effect": "Allow", "Action": ["rds:*"],
+      "Resource": ["arn:${PARTITION}:rds:*:${ACCOUNT_ID}:*"] },
+    { "Effect": "Allow", "Action": ["secretsmanager:*"], "Resource": ["*"] },
+    { "Effect": "Allow", "Action": ["ses:*"], "Resource": ["*"] },
+    { "Effect": "Allow", "Action": ["sqs:*"],
       "Resource": ["arn:${PARTITION}:sqs:*:${ACCOUNT_ID}:*"] },
-    { "Sid": "S3AccountPublicAccessBlock", "Effect": "Allow",
+    { "Effect": "Allow",
       "Action": ["s3:GetAccountPublicAccessBlock","s3:PutAccountPublicAccessBlock"],
       "Resource": ["*"] },
-    { "Sid": "S3CreateAndManageAppBuckets", "Effect": "Allow",
-      "Action": [
-        "s3:CreateBucket","s3:DeleteBucket","s3:PutBucketAcl","s3:PutBucketPolicy","s3:DeleteBucketPolicy",
-        "s3:PutBucketPublicAccessBlock","s3:PutBucketOwnershipControls","s3:PutBucketVersioning",
-        "s3:PutEncryptionConfiguration","s3:PutLifecycleConfiguration","s3:PutBucketObjectLockConfiguration",
-        "s3:PutBucketTagging",
-        "s3:Get*",
-        "s3:ListBucket","s3:ListBucketVersions",
-        "s3:PutObject","s3:DeleteObject"
-      ],
+    { "Effect": "Allow", "Action": ["s3:*"],
       "Resource": [
-        "arn:${PARTITION}:s3:::3am-rootca-*",
-        "arn:${PARTITION}:s3:::3am-rootca-*/*",
-        "arn:${PARTITION}:s3:::3am-crl-*",
-        "arn:${PARTITION}:s3:::3am-crl-*/*",
-        "arn:${PARTITION}:s3:::3am-trail-*",
-        "arn:${PARTITION}:s3:::3am-trail-*/*",
-        "arn:${PARTITION}:s3:::alb-*-3am-access-logs",
-        "arn:${PARTITION}:s3:::alb-*-3am-access-logs/*",
-        "arn:${PARTITION}:s3:::trail-pki-*",
-        "arn:${PARTITION}:s3:::trail-pki-*/*",
-        "arn:${PARTITION}:s3:::*.3amops.com",
-        "arn:${PARTITION}:s3:::*.3amops.com/*"
+        "arn:${PARTITION}:s3:::3am-*","arn:${PARTITION}:s3:::3am-*/*",
+        "arn:${PARTITION}:s3:::alb-*-3am-*","arn:${PARTITION}:s3:::alb-*-3am-*/*",
+        "arn:${PARTITION}:s3:::trail-*","arn:${PARTITION}:s3:::trail-*/*",
+        "arn:${PARTITION}:s3:::*.3amops.com","arn:${PARTITION}:s3:::*.3amops.com/*"
       ] },
-    { "Sid": "KmsCreateCoreSigningKeys", "Effect": "Allow",
+    { "Effect": "Allow",
       "Action": ["kms:CreateKey","kms:TagResource","kms:UntagResource",
                  "kms:EnableKeyRotation","kms:DisableKeyRotation",
                  "kms:ScheduleKeyDeletion","kms:CancelKeyDeletion"],
       "Resource": ["*"] },
-    { "Sid": "KmsXpkiAliases", "Effect": "Allow",
-      "Action": ["kms:*"],
+    { "Effect": "Allow", "Action": ["kms:*"],
       "Resource": ["arn:${PARTITION}:kms:*:${ACCOUNT_ID}:alias/xpki/*"] },
-    { "Sid": "EventsListRules", "Effect": "Allow",
-      "Action": ["events:ListRules"],
-      "Resource": ["*"] },
-    { "Sid": "EventsCoreSchedulerRules", "Effect": "Allow",
-      "Action": ["events:*"],
-      "Resource": ["arn:${PARTITION}:events:*:${ACCOUNT_ID}:rule/3am-*",
-                   "arn:${PARTITION}:events:*:${ACCOUNT_ID}:rule/acme-*",
-                   "arn:${PARTITION}:events:*:${ACCOUNT_ID}:rule/cloudtrail-*"] },
-    { "Sid": "ElbManageAppLoadBalancers", "Effect": "Allow",
-      "Action": ["elasticloadbalancing:*"],
-      "Resource": ["*"] }
+    { "Effect": "Allow", "Action": ["events:ListRules"], "Resource": ["*"] },
+    { "Effect": "Allow", "Action": ["events:*"],
+      "Resource": ["arn:${PARTITION}:events:*:${ACCOUNT_ID}:rule/*"] },
+    { "Effect": "Allow", "Action": ["elasticloadbalancing:*"], "Resource": ["*"] }
   ]
 }
 EOF

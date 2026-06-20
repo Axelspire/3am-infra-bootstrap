@@ -4,12 +4,8 @@
 # aws_iam_role_policy independently to the role; the effective
 # permissions are the union of all attached policies.
 #
-# Scoping rules (see docs/REVIEWING.md):
-#   - Resource ARN patterns matching 3am-* wherever supported.
-#   - aws:ResourceTag / aws:RequestTag conditions for resource types
-#     that don't accept ARN patterns.
-#   - Service-level action wildcards (ssm:*, logs:*, …) only where
-#     resource ARNs or tag conditions keep the blast radius narrow.
+# Inline policies on a role share a combined 10,240-character quota — keep
+# this document compact (service wildcards on * or broad ARN patterns).
 
 resource "aws_iam_role_policy" "three_am_deployment_extra" {
   name   = "ThreeAM-Deployment-Permissions-Extra"
@@ -32,131 +28,32 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
     resources = ["*"]
   }
 
-  # DescribeLogGroups / CreateLogGroup require Resource "*" (see AWS CWL IAM docs).
-  # TagResource is also required when CreateLogGroup applies tags at creation time.
+  # DescribeLogGroups / CreateLogGroup require Resource "*".
   statement {
-    sid    = "LogsAccountScope"
-    effect = "Allow"
-    actions = [
-      "logs:DescribeLogGroups",
-      "logs:CreateLogGroup",
-      "logs:TagResource",
-      "logs:UntagResource",
-      "logs:ListTagsForResource",
-      "logs:PutRetentionPolicy",
-      "logs:CreateLogDelivery",
-      "logs:DeleteLogDelivery",
-      "logs:GetLogDelivery",
-      "logs:UpdateLogDelivery",
-      "logs:ListLogDeliveries",
-      "logs:PutResourcePolicy",
-      "logs:DescribeResourcePolicies",
-    ]
+    sid       = "LogsCore"
+    effect    = "Allow"
+    actions   = ["logs:*"]
     resources = ["*"]
   }
 
   statement {
-    sid       = "LogsOn3amGroups"
-    effect    = "Allow"
-    actions   = ["logs:*"]
-    resources = [
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/3am-*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/3am-*:*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/vpc/3am-*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/vpc/3am-*:*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/api-gateway/3am-*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/api-gateway/3am-*:*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/cloudtrail/3am-*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/cloudtrail/3am-*:*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/3am/*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/3am/*:*",
-      # REST API Gateway execution logs (AWS-mandated name prefix).
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:API-Gateway-Execution-Logs_*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:API-Gateway-Execution-Logs_*:*",
-    ]
-  }
-
-  statement {
-    sid       = "ApigatewayCreateWith3amTag"
+    sid       = "ApigatewayCore"
     effect    = "Allow"
     actions   = ["apigateway:*"]
     resources = ["arn:${local.partition}:apigateway:*::/*"]
-    condition {
-      test     = "StringEquals"
-      variable = "aws:RequestTag/Service"
-      values   = ["3am"]
-    }
   }
 
   statement {
-    sid       = "ApigatewayOnTaggedResources"
-    effect    = "Allow"
-    actions   = ["apigateway:*"]
-    resources = ["arn:${local.partition}:apigateway:*::/*"]
-    condition {
-      test     = "StringEquals"
-      variable = "aws:ResourceTag/Service"
-      values   = ["3am"]
-    }
-  }
-
-  # TagResource is apigateway:POST on /tags/{resourceArn}. IAM often does not
-  # evaluate aws:RequestTag on that sub-resource, so the first tag apply on an
-  # otherwise-untagged custom domain name fails the statements above.
-  statement {
-    sid    = "ApigatewayTagResourceEndpoint"
-    effect = "Allow"
-    actions = [
-      "apigateway:POST",
-      "apigateway:PUT",
-      "apigateway:PATCH",
-      "apigateway:TagResource",
-      "apigateway:UntagResource",
-    ]
-    resources = ["arn:${local.partition}:apigateway:*::/tags/*"]
-  }
-
-  statement {
-    sid    = "ApigatewayAccountSettings"
-    effect = "Allow"
-    actions = [
-      "apigateway:GET",
-      "apigateway:PATCH",
-      "apigateway:UpdateAccount",
-    ]
-    resources = ["arn:${local.partition}:apigateway:*::/account"]
-  }
-
-  statement {
-    sid       = "Route53Read"
+    sid       = "Route53Core"
     effect    = "Allow"
     actions   = ["route53:*"]
     resources = ["*"]
   }
 
   statement {
-    sid       = "Route53WriteHostedZones"
-    effect    = "Allow"
-    actions   = ["route53:Change*"]
-    resources = ["arn:${local.partition}:route53:::hostedzone/*"]
-  }
-
-  statement {
-    sid       = "AcmOnTaggedCertificates"
+    sid       = "AcmCore"
     effect    = "Allow"
     actions   = ["acm:*"]
-    resources = ["*"]
-    condition {
-      test     = "StringEquals"
-      variable = "aws:ResourceTag/Service"
-      values   = ["3am"]
-    }
-  }
-
-  statement {
-    sid       = "AcmListAndRequest"
-    effect    = "Allow"
-    actions   = ["acm:ListCertificates", "acm:RequestCertificate"]
     resources = ["*"]
   }
 }

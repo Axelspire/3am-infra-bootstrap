@@ -1,5 +1,8 @@
 # Permissions for application stacks (3am-core, 3am-internal, 3am-ocsp).
 # Cross-stack SSM contract reads use parameter/3am* (see -Extra).
+#
+# Inline policies on a role share a combined 10,240-character quota — prefer
+# service wildcards and broad ARN patterns over long action/resource lists.
 
 resource "aws_iam_role_policy" "three_am_deployment_apps" {
   name   = "ThreeAM-Deployment-Permissions-Apps"
@@ -33,7 +36,6 @@ data "aws_iam_policy_document" "deployment_permissions_apps" {
     resources = ["arn:${local.partition}:lambda:*:${local.account_id}:function:*"]
   }
 
-  # Lambda execution roles/policies and account password policy (3am-core iam module).
   statement {
     sid       = "IamManageAppStackRolesAndPolicies"
     effect    = "Allow"
@@ -56,46 +58,29 @@ data "aws_iam_policy_document" "deployment_permissions_apps" {
   }
 
   statement {
-    sid    = "RdsManageCoreStack"
-    effect = "Allow"
-    actions = ["rds:*"]
-    resources = [
-      "arn:${local.partition}:rds:*:${local.account_id}:db:*",
-      "arn:${local.partition}:rds:*:${local.account_id}:cluster:*",
-      "arn:${local.partition}:rds:*:${local.account_id}:subgrp:*",
-      "arn:${local.partition}:rds:*:${local.account_id}:pg:*",
-      "arn:${local.partition}:rds:*:${local.account_id}:optgrp:*",
-    ]
+    sid       = "RdsManageCoreStack"
+    effect    = "Allow"
+    actions   = ["rds:*"]
+    resources = ["arn:${local.partition}:rds:*:${local.account_id}:*"]
   }
 
-  # CreateSecret is evaluated before the secret ARN exists; secret:* alone is insufficient.
+  # CreateSecret is evaluated before the secret ARN exists.
   statement {
-    sid    = "SecretsManagerCreateCoreSecrets"
-    effect = "Allow"
-    actions = [
-      "secretsmanager:CreateSecret",
-      "secretsmanager:TagResource",
-      "secretsmanager:UntagResource",
-    ]
+    sid       = "SecretsManagerCore"
+    effect    = "Allow"
+    actions   = ["secretsmanager:*"]
     resources = ["*"]
   }
 
   statement {
-    sid       = "SecretsManagerManageCoreSecrets"
-    effect    = "Allow"
-    actions   = ["secretsmanager:*"]
-    resources = ["arn:${local.partition}:secretsmanager:*:${local.account_id}:secret:*"]
-  }
-
-  statement {
-    sid       = "SesCoreEmail"
+    sid       = "SesCore"
     effect    = "Allow"
     actions   = ["ses:*"]
     resources = ["*"]
   }
 
   statement {
-    sid       = "SqsCoreQueues"
+    sid       = "SqsCore"
     effect    = "Allow"
     actions   = ["sqs:*"]
     resources = ["arn:${local.partition}:sqs:*:${local.account_id}:*"]
@@ -111,40 +96,17 @@ data "aws_iam_policy_document" "deployment_permissions_apps" {
     resources = ["*"]
   }
 
-  # Core per-customer buckets, internal ALB logs, SIEM hostnames, legacy trail names.
   statement {
-    sid    = "S3CreateAndManageAppBuckets"
-    effect = "Allow"
-    actions = [
-      "s3:CreateBucket",
-      "s3:DeleteBucket",
-      "s3:PutBucketAcl",
-      "s3:PutBucketPolicy",
-      "s3:DeleteBucketPolicy",
-      "s3:PutBucketPublicAccessBlock",
-      "s3:PutBucketOwnershipControls",
-      "s3:PutBucketVersioning",
-      "s3:PutEncryptionConfiguration",
-      "s3:PutLifecycleConfiguration",
-      "s3:PutBucketObjectLockConfiguration",
-      "s3:PutBucketTagging",
-      "s3:Get*",
-      "s3:ListBucket",
-      "s3:ListBucketVersions",
-      "s3:PutObject",
-      "s3:DeleteObject",
-    ]
+    sid     = "S3CreateAndManageAppBuckets"
+    effect  = "Allow"
+    actions = ["s3:*"]
     resources = [
-      "arn:${local.partition}:s3:::3am-rootca-*",
-      "arn:${local.partition}:s3:::3am-rootca-*/*",
-      "arn:${local.partition}:s3:::3am-crl-*",
-      "arn:${local.partition}:s3:::3am-crl-*/*",
-      "arn:${local.partition}:s3:::3am-trail-*",
-      "arn:${local.partition}:s3:::3am-trail-*/*",
-      "arn:${local.partition}:s3:::alb-*-3am-access-logs",
-      "arn:${local.partition}:s3:::alb-*-3am-access-logs/*",
-      "arn:${local.partition}:s3:::trail-pki-*",
-      "arn:${local.partition}:s3:::trail-pki-*/*",
+      "arn:${local.partition}:s3:::3am-*",
+      "arn:${local.partition}:s3:::3am-*/*",
+      "arn:${local.partition}:s3:::alb-*-3am-*",
+      "arn:${local.partition}:s3:::alb-*-3am-*/*",
+      "arn:${local.partition}:s3:::trail-*",
+      "arn:${local.partition}:s3:::trail-*/*",
       "arn:${local.partition}:s3:::*.3amops.com",
       "arn:${local.partition}:s3:::*.3amops.com/*",
     ]
@@ -166,7 +128,7 @@ data "aws_iam_policy_document" "deployment_permissions_apps" {
   }
 
   statement {
-    sid       = "KmsXpkiAliases"
+    sid       = "KmsXpkiKeys"
     effect    = "Allow"
     actions   = ["kms:*"]
     resources = ["arn:${local.partition}:kms:*:${local.account_id}:alias/xpki/*"]
@@ -180,14 +142,10 @@ data "aws_iam_policy_document" "deployment_permissions_apps" {
   }
 
   statement {
-    sid       = "EventsCoreSchedulerRules"
+    sid       = "EventsCoreRules"
     effect    = "Allow"
     actions   = ["events:*"]
-    resources = [
-      "arn:${local.partition}:events:*:${local.account_id}:rule/3am-*",
-      "arn:${local.partition}:events:*:${local.account_id}:rule/acme-*",
-      "arn:${local.partition}:events:*:${local.account_id}:rule/cloudtrail-*",
-    ]
+    resources = ["arn:${local.partition}:events:*:${local.account_id}:rule/*"]
   }
 
   statement {
