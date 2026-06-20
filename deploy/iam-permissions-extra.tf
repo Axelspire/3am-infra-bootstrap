@@ -44,6 +44,13 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
       "logs:UntagResource",
       "logs:ListTagsForResource",
       "logs:PutRetentionPolicy",
+      "logs:CreateLogDelivery",
+      "logs:DeleteLogDelivery",
+      "logs:GetLogDelivery",
+      "logs:UpdateLogDelivery",
+      "logs:ListLogDeliveries",
+      "logs:PutResourcePolicy",
+      "logs:DescribeResourcePolicies",
     ]
     resources = ["*"]
   }
@@ -101,10 +108,23 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
     effect = "Allow"
     actions = [
       "apigateway:POST",
+      "apigateway:PUT",
+      "apigateway:PATCH",
       "apigateway:TagResource",
       "apigateway:UntagResource",
     ]
     resources = ["arn:${local.partition}:apigateway:*::/tags/*"]
+  }
+
+  statement {
+    sid    = "ApigatewayAccountSettings"
+    effect = "Allow"
+    actions = [
+      "apigateway:GET",
+      "apigateway:PATCH",
+      "apigateway:UpdateAccount",
+    ]
+    resources = ["arn:${local.partition}:apigateway:*::/account"]
   }
 
   statement {

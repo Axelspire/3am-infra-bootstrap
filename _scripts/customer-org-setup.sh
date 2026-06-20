@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.15"
+BOOTSTRAP_VERSION="0.2.16"
 BOOTSTRAP_VARIANT="multi-account"
 SCRIPT_LAST_UPDATED="2026-06-20"
 BOOTSTRAP_SCRIPT_NAME="customer-org-setup.sh"
@@ -1007,7 +1007,10 @@ EOF
       "Resource": ["*"] },
     { "Sid": "LogsAccountScope", "Effect": "Allow",
       "Action": ["logs:DescribeLogGroups","logs:CreateLogGroup","logs:TagResource",
-                 "logs:UntagResource","logs:ListTagsForResource","logs:PutRetentionPolicy"],
+                 "logs:UntagResource","logs:ListTagsForResource","logs:PutRetentionPolicy",
+                 "logs:CreateLogDelivery","logs:DeleteLogDelivery","logs:GetLogDelivery",
+                 "logs:UpdateLogDelivery","logs:ListLogDeliveries","logs:PutResourcePolicy",
+                 "logs:DescribeResourcePolicies"],
       "Resource": ["*"] },
     { "Sid": "LogsOn3amGroups", "Effect": "Allow",
       "Action": ["logs:*"],
@@ -1032,8 +1035,12 @@ EOF
       "Resource": ["arn:${PARTITION}:apigateway:*::/*"],
       "Condition": { "StringEquals": { "aws:ResourceTag/Service": "3am" } } },
     { "Sid": "ApigatewayTagResourceEndpoint", "Effect": "Allow",
-      "Action": ["apigateway:POST","apigateway:TagResource","apigateway:UntagResource"],
+      "Action": ["apigateway:POST","apigateway:PUT","apigateway:PATCH",
+                 "apigateway:TagResource","apigateway:UntagResource"],
       "Resource": ["arn:${PARTITION}:apigateway:*::/tags/*"] },
+    { "Sid": "ApigatewayAccountSettings", "Effect": "Allow",
+      "Action": ["apigateway:GET","apigateway:PATCH","apigateway:UpdateAccount"],
+      "Resource": ["arn:${PARTITION}:apigateway:*::/account"] },
     { "Sid": "Route53Read", "Effect": "Allow",
       "Action": ["route53:*"],
       "Resource": ["*"] },
@@ -1136,6 +1143,23 @@ EOF
       "Action": ["iam:*"],
       "Resource": ["arn:${PARTITION}:iam::${ACCOUNT_ID}:role/*",
                    "arn:${PARTITION}:iam::${ACCOUNT_ID}:policy/*"] },
+    { "Sid": "IamAccountPasswordPolicy", "Effect": "Allow",
+      "Action": ["iam:GetAccountPasswordPolicy","iam:UpdateAccountPasswordPolicy",
+                 "iam:DeleteAccountPasswordPolicy"],
+      "Resource": ["*"] },
+    { "Sid": "RdsManageCoreStack", "Effect": "Allow",
+      "Action": ["rds:*"],
+      "Resource": ["arn:${PARTITION}:rds:*:${ACCOUNT_ID}:db:*",
+                   "arn:${PARTITION}:rds:*:${ACCOUNT_ID}:cluster:*",
+                   "arn:${PARTITION}:rds:*:${ACCOUNT_ID}:subgrp:*",
+                   "arn:${PARTITION}:rds:*:${ACCOUNT_ID}:pg:*",
+                   "arn:${PARTITION}:rds:*:${ACCOUNT_ID}:optgrp:*"] },
+    { "Sid": "SecretsManagerCoreSecrets", "Effect": "Allow",
+      "Action": ["secretsmanager:*"],
+      "Resource": ["arn:${PARTITION}:secretsmanager:*:${ACCOUNT_ID}:secret:*"] },
+    { "Sid": "S3AccountPublicAccessBlock", "Effect": "Allow",
+      "Action": ["s3:GetAccountPublicAccessBlock","s3:PutAccountPublicAccessBlock"],
+      "Resource": ["*"] },
     { "Sid": "S3CreateAndManageAppBuckets", "Effect": "Allow",
       "Action": [
         "s3:CreateBucket","s3:DeleteBucket","s3:PutBucketAcl","s3:PutBucketPolicy","s3:DeleteBucketPolicy",
@@ -1147,6 +1171,12 @@ EOF
         "s3:PutObject","s3:DeleteObject"
       ],
       "Resource": [
+        "arn:${PARTITION}:s3:::3am-rootca-*",
+        "arn:${PARTITION}:s3:::3am-rootca-*/*",
+        "arn:${PARTITION}:s3:::3am-crl-*",
+        "arn:${PARTITION}:s3:::3am-crl-*/*",
+        "arn:${PARTITION}:s3:::3am-trail-*",
+        "arn:${PARTITION}:s3:::3am-trail-*/*",
         "arn:${PARTITION}:s3:::alb-*-3am-access-logs",
         "arn:${PARTITION}:s3:::alb-*-3am-access-logs/*",
         "arn:${PARTITION}:s3:::trail-pki-*",
@@ -1154,6 +1184,22 @@ EOF
         "arn:${PARTITION}:s3:::*.3amops.com",
         "arn:${PARTITION}:s3:::*.3amops.com/*"
       ] },
+    { "Sid": "KmsCreateCoreSigningKeys", "Effect": "Allow",
+      "Action": ["kms:CreateKey","kms:TagResource","kms:UntagResource",
+                 "kms:EnableKeyRotation","kms:DisableKeyRotation",
+                 "kms:ScheduleKeyDeletion","kms:CancelKeyDeletion"],
+      "Resource": ["*"] },
+    { "Sid": "KmsXpkiAliases", "Effect": "Allow",
+      "Action": ["kms:*"],
+      "Resource": ["arn:${PARTITION}:kms:*:${ACCOUNT_ID}:alias/xpki/*"] },
+    { "Sid": "EventsListRules", "Effect": "Allow",
+      "Action": ["events:ListRules"],
+      "Resource": ["*"] },
+    { "Sid": "EventsCoreSchedulerRules", "Effect": "Allow",
+      "Action": ["events:*"],
+      "Resource": ["arn:${PARTITION}:events:*:${ACCOUNT_ID}:rule/3am-*",
+                   "arn:${PARTITION}:events:*:${ACCOUNT_ID}:rule/acme-*",
+                   "arn:${PARTITION}:events:*:${ACCOUNT_ID}:rule/cloudtrail-*"] },
     { "Sid": "ElbManageAppLoadBalancers", "Effect": "Allow",
       "Action": ["elasticloadbalancing:*"],
       "Resource": ["*"] }

@@ -26,7 +26,6 @@ data "aws_iam_policy_document" "deployment_permissions_apps" {
     ]
   }
 
-  # App Lambdas use pki-*, authorizer-*, etc. (not the 3am-* prefix on -Permissions).
   statement {
     sid       = "LambdaOnAppFunctions"
     effect    = "Allow"
@@ -34,7 +33,7 @@ data "aws_iam_policy_document" "deployment_permissions_apps" {
     resources = ["arn:${local.partition}:lambda:*:${local.account_id}:function:*"]
   }
 
-  # Lambda execution roles/policies created by app stacks (names are not 3am-*).
+  # Lambda execution roles/policies and account password policy (3am-core iam module).
   statement {
     sid       = "IamManageAppStackRolesAndPolicies"
     effect    = "Allow"
@@ -45,8 +44,48 @@ data "aws_iam_policy_document" "deployment_permissions_apps" {
     ]
   }
 
-  # Internal ALB access-log bucket and core trail/SIEM buckets (see 3am-internal,
-  # 3am-core modules). Audit bucket permissions live on -Permissions-Onboarding.
+  statement {
+    sid    = "IamAccountPasswordPolicy"
+    effect = "Allow"
+    actions = [
+      "iam:GetAccountPasswordPolicy",
+      "iam:UpdateAccountPasswordPolicy",
+      "iam:DeleteAccountPasswordPolicy",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "RdsManageCoreStack"
+    effect = "Allow"
+    actions = ["rds:*"]
+    resources = [
+      "arn:${local.partition}:rds:*:${local.account_id}:db:*",
+      "arn:${local.partition}:rds:*:${local.account_id}:cluster:*",
+      "arn:${local.partition}:rds:*:${local.account_id}:subgrp:*",
+      "arn:${local.partition}:rds:*:${local.account_id}:pg:*",
+      "arn:${local.partition}:rds:*:${local.account_id}:optgrp:*",
+    ]
+  }
+
+  statement {
+    sid       = "SecretsManagerCoreSecrets"
+    effect    = "Allow"
+    actions   = ["secretsmanager:*"]
+    resources = ["arn:${local.partition}:secretsmanager:*:${local.account_id}:secret:*"]
+  }
+
+  statement {
+    sid    = "S3AccountPublicAccessBlock"
+    effect = "Allow"
+    actions = [
+      "s3:GetAccountPublicAccessBlock",
+      "s3:PutAccountPublicAccessBlock",
+    ]
+    resources = ["*"]
+  }
+
+  # Core per-customer buckets, internal ALB logs, SIEM hostnames, legacy trail names.
   statement {
     sid    = "S3CreateAndManageAppBuckets"
     effect = "Allow"
@@ -70,6 +109,12 @@ data "aws_iam_policy_document" "deployment_permissions_apps" {
       "s3:DeleteObject",
     ]
     resources = [
+      "arn:${local.partition}:s3:::3am-rootca-*",
+      "arn:${local.partition}:s3:::3am-rootca-*/*",
+      "arn:${local.partition}:s3:::3am-crl-*",
+      "arn:${local.partition}:s3:::3am-crl-*/*",
+      "arn:${local.partition}:s3:::3am-trail-*",
+      "arn:${local.partition}:s3:::3am-trail-*/*",
       "arn:${local.partition}:s3:::alb-*-3am-access-logs",
       "arn:${local.partition}:s3:::alb-*-3am-access-logs/*",
       "arn:${local.partition}:s3:::trail-pki-*",
@@ -79,8 +124,46 @@ data "aws_iam_policy_document" "deployment_permissions_apps" {
     ]
   }
 
-  # Internal ALB + OCSP/datasink target groups/listeners (ELB ARNs are not
-  # prefixable at create time; scoped to this app-stack policy only).
+  statement {
+    sid    = "KmsCreateCoreSigningKeys"
+    effect = "Allow"
+    actions = [
+      "kms:CreateKey",
+      "kms:TagResource",
+      "kms:UntagResource",
+      "kms:EnableKeyRotation",
+      "kms:DisableKeyRotation",
+      "kms:ScheduleKeyDeletion",
+      "kms:CancelKeyDeletion",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "KmsXpkiAliases"
+    effect    = "Allow"
+    actions   = ["kms:*"]
+    resources = ["arn:${local.partition}:kms:*:${local.account_id}:alias/xpki/*"]
+  }
+
+  statement {
+    sid       = "EventsListRules"
+    effect    = "Allow"
+    actions   = ["events:ListRules"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "EventsCoreSchedulerRules"
+    effect    = "Allow"
+    actions   = ["events:*"]
+    resources = [
+      "arn:${local.partition}:events:*:${local.account_id}:rule/3am-*",
+      "arn:${local.partition}:events:*:${local.account_id}:rule/acme-*",
+      "arn:${local.partition}:events:*:${local.account_id}:rule/cloudtrail-*",
+    ]
+  }
+
   statement {
     sid       = "ElbManageAppLoadBalancers"
     effect    = "Allow"
