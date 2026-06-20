@@ -85,9 +85,26 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
     resources = [
       "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/3am-*",
       "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/3am-*:*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/vpc/3am-*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/vpc/3am-*:*",
       "arn:${local.partition}:logs:*:${local.account_id}:log-group:/3am/*",
       "arn:${local.partition}:logs:*:${local.account_id}:log-group:/3am/*:*",
     ]
+  }
+
+  statement {
+    sid    = "ApiGatewayCreateWith3amTag"
+    effect = "Allow"
+    actions = [
+      "apigateway:POST",
+      "apigateway:TagResource",
+    ]
+    resources = ["arn:${local.partition}:apigateway:*::/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Service"
+      values   = ["3am"]
+    }
   }
 
   # API Gateway: deploy / manage APIs tagged Service=3am.
@@ -121,6 +138,7 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
       "route53:GetHostedZone",
       "route53:ListResourceRecordSets",
       "route53:GetChange",
+      "route53:ListTagsForResource",
     ]
     resources = ["*"]
   }

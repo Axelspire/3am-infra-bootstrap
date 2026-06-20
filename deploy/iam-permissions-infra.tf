@@ -9,7 +9,6 @@ resource "aws_iam_role_policy" "three_am_deployment_infra" {
 }
 
 data "aws_iam_policy_document" "deployment_permissions_infra" {
-  # Downstream stacks consume /3am-infra/<env>/<region>/* via SSM.
   statement {
     sid    = "SsmReadOn3amInfraParameters"
     effect = "Allow"
@@ -29,15 +28,13 @@ data "aws_iam_policy_document" "deployment_permissions_infra" {
       "ssm:DeleteParameter",
       "ssm:DeleteParameters",
       "ssm:AddTagsToResource",
-      "ssm:RemoveTagsFromResource",
+      "ssm:RemoveTagsForResource",
       "ssm:ListTagsForResource",
       "ssm:LabelParameterVersion",
     ]
     resources = ["arn:${local.partition}:ssm:*:${local.account_id}:parameter/3am-infra/*"]
   }
 
-  # Provider default_tags set Service=3am on create; subsequent mutations match
-  # aws:ResourceTag/Service.
   statement {
     sid    = "Ec2NetworkingCreateWith3amTag"
     effect = "Allow"
@@ -51,6 +48,8 @@ data "aws_iam_policy_document" "deployment_permissions_infra" {
       "ec2:CreateNatGateway",
       "ec2:CreateVpcEndpoint",
       "ec2:CreateManagedPrefixList",
+      "ec2:CreateNetworkAcl",
+      "ec2:CreateNetworkAclEntry",
       "ec2:CreateSecurityGroup",
       "ec2:CreateTags",
     ]
@@ -85,6 +84,9 @@ data "aws_iam_policy_document" "deployment_permissions_infra" {
       "ec2:ModifyVpcEndpoint",
       "ec2:ModifyManagedPrefixList",
       "ec2:DeleteManagedPrefixList",
+      "ec2:DeleteNetworkAcl",
+      "ec2:DeleteNetworkAclEntry",
+      "ec2:ReplaceNetworkAclEntry",
       "ec2:AuthorizeSecurityGroupIngress",
       "ec2:AuthorizeSecurityGroupEgress",
       "ec2:RevokeSecurityGroupIngress",
@@ -101,7 +103,16 @@ data "aws_iam_policy_document" "deployment_permissions_infra" {
     }
   }
 
-  # Firewall Lambda module creates named 3am-* policies/roles.
+  statement {
+    sid    = "Ec2FlowLogs"
+    effect = "Allow"
+    actions = [
+      "ec2:CreateFlowLogs",
+      "ec2:DeleteFlowLogs",
+    ]
+    resources = ["*"]
+  }
+
   statement {
     sid    = "IamManage3amScopedPoliciesAndRoles"
     effect = "Allow"
@@ -120,6 +131,7 @@ data "aws_iam_policy_document" "deployment_permissions_infra" {
       "iam:DeleteRole",
       "iam:GetRole",
       "iam:UpdateRole",
+      "iam:UpdateAssumeRolePolicy",
       "iam:PassRole",
       "iam:AttachRolePolicy",
       "iam:DetachRolePolicy",
@@ -136,6 +148,13 @@ data "aws_iam_policy_document" "deployment_permissions_infra" {
       "arn:${local.partition}:iam::${local.account_id}:policy/3am-*",
       "arn:${local.partition}:iam::${local.account_id}:role/3am-*",
     ]
+  }
+
+  statement {
+    sid       = "EventsListRules"
+    effect    = "Allow"
+    actions   = ["events:ListRules"]
+    resources = ["*"]
   }
 
   statement {
@@ -157,7 +176,6 @@ data "aws_iam_policy_document" "deployment_permissions_infra" {
     resources = ["arn:${local.partition}:events:*:${local.account_id}:rule/3am-*"]
   }
 
-  # Account-local application CMK (alias/3am-s3-encryption-key) created by infra.
   statement {
     sid    = "KmsCreate3amTaggedKeys"
     effect = "Allow"
@@ -180,6 +198,7 @@ data "aws_iam_policy_document" "deployment_permissions_infra" {
       "kms:CreateAlias",
       "kms:DeleteAlias",
       "kms:UpdateAlias",
+      "kms:ListAliases",
       "kms:PutKeyPolicy",
       "kms:GetKeyPolicy",
       "kms:EnableKeyRotation",
