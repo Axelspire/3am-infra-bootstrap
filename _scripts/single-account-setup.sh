@@ -20,7 +20,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.6"
+BOOTSTRAP_VERSION="0.2.7"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-06-20"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
@@ -948,6 +948,10 @@ EOF
     { "Sid": "Ec2FlowLogs", "Effect": "Allow",
       "Action": ["ec2:CreateFlowLogs","ec2:DeleteFlowLogs"],
       "Resource": ["*"] },
+    { "Sid": "Ec2NaclAssociations", "Effect": "Allow",
+      "Action": ["ec2:ReplaceNetworkAclAssociation","ec2:AssociateNetworkAclSubnet",
+                 "ec2:DisassociateNetworkAclSubnet"],
+      "Resource": ["*"] },
     { "Sid": "IamManage3amScopedPoliciesAndRoles", "Effect": "Allow",
       "Action": ["iam:*"],
       "Resource": ["arn:${PARTITION}:iam::${ACCOUNT_ID}:policy/3am-*",
@@ -962,6 +966,14 @@ EOF
       "Action": ["kms:CreateKey","kms:TagResource"],
       "Resource": ["*"],
       "Condition": { "StringEquals": { "aws:RequestTag/Service": "3am" } } },
+    { "Sid": "KmsCreate3amAliases", "Effect": "Allow",
+      "Action": ["kms:CreateAlias"],
+      "Resource": ["arn:${PARTITION}:kms:*:${ACCOUNT_ID}:alias/3am-*",
+                   "arn:${PARTITION}:kms:*:${ACCOUNT_ID}:key/*"] },
+    { "Sid": "KmsManage3amAliases", "Effect": "Allow",
+      "Action": ["kms:UpdateAlias","kms:DeleteAlias"],
+      "Resource": ["arn:${PARTITION}:kms:*:${ACCOUNT_ID}:alias/3am-*",
+                   "arn:${PARTITION}:kms:*:${ACCOUNT_ID}:key/*"] },
     { "Sid": "KmsManage3amTaggedKeys", "Effect": "Allow",
       "Action": ["kms:*"],
       "Resource": ["*"],

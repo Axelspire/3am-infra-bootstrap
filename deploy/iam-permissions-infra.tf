@@ -53,6 +53,19 @@ data "aws_iam_policy_document" "deployment_permissions_infra" {
     resources = ["*"]
   }
 
+  # NACL/subnet association replaces the VPC default NACL (untagged); cannot
+  # require aws:ResourceTag/Service=3am on the authorization resource.
+  statement {
+    sid    = "Ec2NaclAssociations"
+    effect = "Allow"
+    actions = [
+      "ec2:ReplaceNetworkAclAssociation",
+      "ec2:AssociateNetworkAclSubnet",
+      "ec2:DisassociateNetworkAclSubnet",
+    ]
+    resources = ["*"]
+  }
+
   statement {
     sid       = "IamManage3amScopedPoliciesAndRoles"
     effect    = "Allow"
@@ -90,6 +103,29 @@ data "aws_iam_policy_document" "deployment_permissions_infra" {
       variable = "aws:RequestTag/Service"
       values   = ["3am"]
     }
+  }
+
+  statement {
+    sid    = "KmsCreate3amAliases"
+    effect = "Allow"
+    actions = ["kms:CreateAlias"]
+    resources = [
+      "arn:${local.partition}:kms:*:${local.account_id}:alias/3am-*",
+      "arn:${local.partition}:kms:*:${local.account_id}:key/*",
+    ]
+  }
+
+  statement {
+    sid    = "KmsManage3amAliases"
+    effect = "Allow"
+    actions = [
+      "kms:UpdateAlias",
+      "kms:DeleteAlias",
+    ]
+    resources = [
+      "arn:${local.partition}:kms:*:${local.account_id}:alias/3am-*",
+      "arn:${local.partition}:kms:*:${local.account_id}:key/*",
+    ]
   }
 
   statement {
