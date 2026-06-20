@@ -42,6 +42,7 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
       "logs:CreateLogGroup",
       "logs:TagResource",
       "logs:UntagResource",
+      "logs:ListTagsForResource",
       "logs:PutRetentionPolicy",
     ]
     resources = ["*"]
@@ -54,6 +55,13 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
     resources = [
       "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/3am-*",
       "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/pki-*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/housekeep-*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/alert-*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/cmdb-*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/authorizer-*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/akamai-*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/log-*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/spa-*",
       "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/vpc/3am-*",
       "arn:${local.partition}:logs:*:${local.account_id}:log-group:/3am/*",
     ]

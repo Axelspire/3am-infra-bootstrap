@@ -20,7 +20,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.13"
+BOOTSTRAP_VERSION="0.2.14"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-06-20"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
@@ -864,12 +864,19 @@ EOF
       "Resource": ["*"] },
     { "Sid": "LogsAccountScope", "Effect": "Allow",
       "Action": ["logs:DescribeLogGroups","logs:CreateLogGroup","logs:TagResource",
-                 "logs:UntagResource","logs:PutRetentionPolicy"],
+                 "logs:UntagResource","logs:ListTagsForResource","logs:PutRetentionPolicy"],
       "Resource": ["*"] },
     { "Sid": "LogsOn3amGroups", "Effect": "Allow",
       "Action": ["logs:*"],
       "Resource": ["arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/3am-*",
                    "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/pki-*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/housekeep-*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/alert-*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/cmdb-*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/authorizer-*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/akamai-*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/log-*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/spa-*",
                    "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/vpc/3am-*",
                    "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/3am/*"] },
     { "Sid": "ApigatewayCreateWith3amTag", "Effect": "Allow",
