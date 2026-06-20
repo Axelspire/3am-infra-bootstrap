@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.3"
+BOOTSTRAP_VERSION="0.2.5"
 BOOTSTRAP_VARIANT="multi-account"
 SCRIPT_LAST_UPDATED="2026-06-20"
 BOOTSTRAP_SCRIPT_NAME="customer-org-setup.sh"
@@ -1005,8 +1005,11 @@ EOF
     { "Sid": "LogsDescribeLogGroups", "Effect": "Allow",
       "Action": ["logs:DescribeLogGroups"],
       "Resource": ["*"] },
+    { "Sid": "LogsCreateLogGroup", "Effect": "Allow",
+      "Action": ["logs:CreateLogGroup"],
+      "Resource": ["*"] },
     { "Sid": "LogsOn3amGroups", "Effect": "Allow",
-      "Action": ["logs:CreateLogGroup","logs:CreateLogStream","logs:DeleteLogGroup",
+      "Action": ["logs:CreateLogStream","logs:DeleteLogGroup",
                  "logs:DescribeLogStreams","logs:PutLogEvents",
                  "logs:PutRetentionPolicy","logs:TagResource","logs:UntagResource",
                  "logs:ListTagsForResource","logs:AssociateKmsKey"],
@@ -1093,6 +1096,13 @@ EOF
                  "ssm:AddTagsToResource","ssm:RemoveTagsFromResource","ssm:ListTagsForResource",
                  "ssm:LabelParameterVersion"],
       "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am-infra/*"] },
+    { "Sid": "Ec2NetworkingRead", "Effect": "Allow",
+      "Action": ["ec2:DescribeVpcs","ec2:DescribeVpcAttribute","ec2:DescribeSubnets","ec2:DescribeRouteTables",
+                 "ec2:DescribeNetworkInterfaces","ec2:DescribeSecurityGroups","ec2:DescribeInternetGateways",
+                 "ec2:DescribeNatGateways","ec2:DescribeAddresses","ec2:DescribeVpcEndpoints",
+                 "ec2:DescribeManagedPrefixLists","ec2:GetManagedPrefixListEntries","ec2:DescribeNetworkAcls",
+                 "ec2:DescribeFlowLogs","ec2:DescribeAvailabilityZones","ec2:DescribeRegions","ec2:DescribeAccountAttributes"],
+      "Resource": ["*"] },
     { "Sid": "Ec2NetworkingCreateWith3amTag", "Effect": "Allow",
       "Action": ["ec2:CreateVpc","ec2:CreateSubnet","ec2:CreateInternetGateway","ec2:CreateRouteTable",
                  "ec2:CreateRoute","ec2:AllocateAddress","ec2:CreateNatGateway","ec2:CreateVpcEndpoint",

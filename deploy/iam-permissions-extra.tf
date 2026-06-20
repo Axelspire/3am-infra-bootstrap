@@ -67,11 +67,20 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
     resources = ["*"]
   }
 
+  # CreateLogGroup is also evaluated without a resolvable log-group ARN (the
+  # group does not exist yet). Scoped log-group patterns such as
+  # /aws/vpc/3am-* do not satisfy IAM during CreateLogGroup.
+  statement {
+    sid       = "LogsCreateLogGroup"
+    effect    = "Allow"
+    actions   = ["logs:CreateLogGroup"]
+    resources = ["*"]
+  }
+
   statement {
     sid    = "LogsOn3amGroups"
     effect = "Allow"
     actions = [
-      "logs:CreateLogGroup",
       "logs:CreateLogStream",
       "logs:DeleteLogGroup",
       "logs:DescribeLogStreams",

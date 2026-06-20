@@ -35,6 +35,35 @@ data "aws_iam_policy_document" "deployment_permissions_infra" {
     resources = ["arn:${local.partition}:ssm:*:${local.account_id}:parameter/3am-infra/*"]
   }
 
+  # Read-only EC2 APIs used by the 3am-infra network module during plan/apply
+  # (EIP/NAT wait loops call DescribeAddresses, etc.). Also present on
+  # ThreeAM-Deployment-Permissions-Ec2; duplicated here so infra deploy is
+  # not blocked when the Ec2 inline policy is stale or missing.
+  statement {
+    sid    = "Ec2NetworkingRead"
+    effect = "Allow"
+    actions = [
+      "ec2:DescribeVpcs",
+      "ec2:DescribeVpcAttribute",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeRouteTables",
+      "ec2:DescribeNetworkInterfaces",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeInternetGateways",
+      "ec2:DescribeNatGateways",
+      "ec2:DescribeAddresses",
+      "ec2:DescribeVpcEndpoints",
+      "ec2:DescribeManagedPrefixLists",
+      "ec2:GetManagedPrefixListEntries",
+      "ec2:DescribeNetworkAcls",
+      "ec2:DescribeFlowLogs",
+      "ec2:DescribeAvailabilityZones",
+      "ec2:DescribeRegions",
+      "ec2:DescribeAccountAttributes",
+    ]
+    resources = ["*"]
+  }
+
   statement {
     sid    = "Ec2NetworkingCreateWith3amTag"
     effect = "Allow"
