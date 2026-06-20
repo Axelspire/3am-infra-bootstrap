@@ -33,10 +33,17 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
   }
 
   # DescribeLogGroups / CreateLogGroup require Resource "*" (see AWS CWL IAM docs).
+  # TagResource is also required when CreateLogGroup applies tags at creation time.
   statement {
-    sid       = "LogsAccountScope"
-    effect    = "Allow"
-    actions   = ["logs:DescribeLogGroups", "logs:CreateLogGroup"]
+    sid    = "LogsAccountScope"
+    effect = "Allow"
+    actions = [
+      "logs:DescribeLogGroups",
+      "logs:CreateLogGroup",
+      "logs:TagResource",
+      "logs:UntagResource",
+      "logs:PutRetentionPolicy",
+    ]
     resources = ["*"]
   }
 
@@ -46,6 +53,7 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
     actions   = ["logs:*"]
     resources = [
       "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/3am-*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/pki-*",
       "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/vpc/3am-*",
       "arn:${local.partition}:logs:*:${local.account_id}:log-group:/3am/*",
     ]

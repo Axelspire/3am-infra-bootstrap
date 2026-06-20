@@ -84,7 +84,8 @@ Three inline policies, all attached to the same role.
 
 - SSM read/write on `/3am*` parameters (`/3am/bootstrap`, `/3am-infra/*`,
   `/3am-internal/*`, `/3am-core/*`, …). `DescribeParameters` on `Resource: "*"`.
-- CloudWatch Logs on `/aws/lambda/3am-*` and `/3am/*` log groups only.
+- CloudWatch Logs on `/aws/lambda/3am-*`, `/aws/lambda/pki-*`, and `/3am/*`
+  log groups; account-scoped `CreateLogGroup`/`TagResource`.
 - API Gateway full CRUD on resources tagged `Service=3am`.
 - Route 53: `route53:*` read; `route53:Change*` on hosted zones (infra APIGW/ACM validation records).
 - ACM: list and request anywhere; describe/delete/tag on certificates
@@ -96,6 +97,8 @@ Three inline policies, all attached to the same role.
   nested paths such as `policy/service-role/*`).
 - Lambda full access on all functions in the account (app stacks use `pki-*`, `authorizer-*`, …).
 - IAM full access on customer `role/*` and `policy/*` (Lambda execution roles).
+- S3 create/manage on app buckets (`alb-*-3am-access-logs`, `trail-pki-*`, `*.3amops.com`).
+- ELB full access (`elasticloadbalancing:*`) for internal ALB and OCSP target groups.
 
 ## 4. CMK policy walkthrough
 

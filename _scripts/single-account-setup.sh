@@ -20,7 +20,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.10"
+BOOTSTRAP_VERSION="0.2.11"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-06-20"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
@@ -863,11 +863,13 @@ EOF
       "Action": ["ssm:DescribeParameters"],
       "Resource": ["*"] },
     { "Sid": "LogsAccountScope", "Effect": "Allow",
-      "Action": ["logs:DescribeLogGroups","logs:CreateLogGroup"],
+      "Action": ["logs:DescribeLogGroups","logs:CreateLogGroup","logs:TagResource",
+                 "logs:UntagResource","logs:PutRetentionPolicy"],
       "Resource": ["*"] },
     { "Sid": "LogsOn3amGroups", "Effect": "Allow",
       "Action": ["logs:*"],
       "Resource": ["arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/3am-*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/pki-*",
                    "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/vpc/3am-*",
                    "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/3am/*"] },
     { "Sid": "ApigatewayCreateWith3amTag", "Effect": "Allow",
@@ -979,7 +981,28 @@ EOF
     { "Sid": "IamManageAppStackRolesAndPolicies", "Effect": "Allow",
       "Action": ["iam:*"],
       "Resource": ["arn:${PARTITION}:iam::${ACCOUNT_ID}:role/*",
-                   "arn:${PARTITION}:iam::${ACCOUNT_ID}:policy/*"] }
+                   "arn:${PARTITION}:iam::${ACCOUNT_ID}:policy/*"] },
+    { "Sid": "S3CreateAndManageAppBuckets", "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket","s3:DeleteBucket","s3:PutBucketAcl","s3:PutBucketPolicy",
+        "s3:PutBucketPublicAccessBlock","s3:PutBucketOwnershipControls","s3:PutBucketVersioning",
+        "s3:PutEncryptionConfiguration","s3:PutLifecycleConfiguration","s3:PutBucketObjectLockConfiguration",
+        "s3:PutBucketTagging",
+        "s3:Get*",
+        "s3:ListBucket","s3:ListBucketVersions",
+        "s3:PutObject","s3:DeleteObject"
+      ],
+      "Resource": [
+        "arn:${PARTITION}:s3:::alb-*-3am-access-logs",
+        "arn:${PARTITION}:s3:::alb-*-3am-access-logs/*",
+        "arn:${PARTITION}:s3:::trail-pki-*",
+        "arn:${PARTITION}:s3:::trail-pki-*/*",
+        "arn:${PARTITION}:s3:::*.3amops.com",
+        "arn:${PARTITION}:s3:::*.3amops.com/*"
+      ] },
+    { "Sid": "ElbManageAppLoadBalancers", "Effect": "Allow",
+      "Action": ["elasticloadbalancing:*"],
+      "Resource": ["*"] }
   ]
 }
 EOF
