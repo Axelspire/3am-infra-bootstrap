@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.14"
+BOOTSTRAP_VERSION="0.2.15"
 BOOTSTRAP_VARIANT="multi-account"
 SCRIPT_LAST_UPDATED="2026-06-20"
 BOOTSTRAP_SCRIPT_NAME="customer-org-setup.sh"
@@ -1012,16 +1012,17 @@ EOF
     { "Sid": "LogsOn3amGroups", "Effect": "Allow",
       "Action": ["logs:*"],
       "Resource": ["arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/3am-*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/pki-*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/housekeep-*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/alert-*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/cmdb-*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/authorizer-*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/akamai-*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/log-*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/spa-*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/3am-*:*",
                    "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/vpc/3am-*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/3am/*"] },
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/vpc/3am-*:*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/api-gateway/3am-*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/api-gateway/3am-*:*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/cloudtrail/3am-*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/cloudtrail/3am-*:*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/3am/*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/3am/*:*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:API-Gateway-Execution-Logs_*",
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:API-Gateway-Execution-Logs_*:*"] },
     { "Sid": "ApigatewayCreateWith3amTag", "Effect": "Allow",
       "Action": ["apigateway:*"],
       "Resource": ["arn:${PARTITION}:apigateway:*::/*"],

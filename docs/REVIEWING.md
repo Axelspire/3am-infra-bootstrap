@@ -84,7 +84,7 @@ Three inline policies, all attached to the same role.
 
 - SSM read/write on `/3am*` parameters (`/3am/bootstrap`, `/3am-infra/*`,
   `/3am-internal/*`, `/3am-core/*`, …). `DescribeParameters` on `Resource: "*"`.
-- CloudWatch Logs on `/aws/lambda/3am-*`, `/aws/lambda/pki-*`, and `/3am/*`
+- CloudWatch Logs on `/aws/lambda/3am-*`, `/aws/api-gateway/3am-*`, `/aws/cloudtrail/3am-*`, `/aws/vpc/3am-*`, and `/3am/*`
   log groups; account-scoped `CreateLogGroup`/`TagResource`.
 - API Gateway full CRUD on resources tagged `Service=3am`, plus
   `POST`/`TagResource` on the `/tags/*` sub-resource (first tag on an

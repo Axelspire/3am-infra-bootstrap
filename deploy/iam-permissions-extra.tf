@@ -54,16 +54,18 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
     actions   = ["logs:*"]
     resources = [
       "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/3am-*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/pki-*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/housekeep-*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/alert-*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/cmdb-*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/authorizer-*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/akamai-*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/log-*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/spa-*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/3am-*:*",
       "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/vpc/3am-*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/vpc/3am-*:*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/api-gateway/3am-*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/api-gateway/3am-*:*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/cloudtrail/3am-*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/cloudtrail/3am-*:*",
       "arn:${local.partition}:logs:*:${local.account_id}:log-group:/3am/*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/3am/*:*",
+      # REST API Gateway execution logs (AWS-mandated name prefix).
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:API-Gateway-Execution-Logs_*",
+      "arn:${local.partition}:logs:*:${local.account_id}:log-group:API-Gateway-Execution-Logs_*:*",
     ]
   }
 
