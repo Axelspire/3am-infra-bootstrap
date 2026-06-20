@@ -68,11 +68,37 @@ data "aws_iam_policy_document" "deployment_permissions_apps" {
     ]
   }
 
+  # CreateSecret is evaluated before the secret ARN exists; secret:* alone is insufficient.
   statement {
-    sid       = "SecretsManagerCoreSecrets"
+    sid    = "SecretsManagerCreateCoreSecrets"
+    effect = "Allow"
+    actions = [
+      "secretsmanager:CreateSecret",
+      "secretsmanager:TagResource",
+      "secretsmanager:UntagResource",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "SecretsManagerManageCoreSecrets"
     effect    = "Allow"
     actions   = ["secretsmanager:*"]
     resources = ["arn:${local.partition}:secretsmanager:*:${local.account_id}:secret:*"]
+  }
+
+  statement {
+    sid       = "SesCoreEmail"
+    effect    = "Allow"
+    actions   = ["ses:*"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "SqsCoreQueues"
+    effect    = "Allow"
+    actions   = ["sqs:*"]
+    resources = ["arn:${local.partition}:sqs:*:${local.account_id}:*"]
   }
 
   statement {

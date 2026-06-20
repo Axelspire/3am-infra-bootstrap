@@ -20,7 +20,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.16"
+BOOTSTRAP_VERSION="0.2.17"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-06-20"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
@@ -1011,9 +1011,18 @@ EOF
                    "arn:${PARTITION}:rds:*:${ACCOUNT_ID}:subgrp:*",
                    "arn:${PARTITION}:rds:*:${ACCOUNT_ID}:pg:*",
                    "arn:${PARTITION}:rds:*:${ACCOUNT_ID}:optgrp:*"] },
-    { "Sid": "SecretsManagerCoreSecrets", "Effect": "Allow",
+    { "Sid": "SecretsManagerCreateCoreSecrets", "Effect": "Allow",
+      "Action": ["secretsmanager:CreateSecret","secretsmanager:TagResource","secretsmanager:UntagResource"],
+      "Resource": ["*"] },
+    { "Sid": "SecretsManagerManageCoreSecrets", "Effect": "Allow",
       "Action": ["secretsmanager:*"],
       "Resource": ["arn:${PARTITION}:secretsmanager:*:${ACCOUNT_ID}:secret:*"] },
+    { "Sid": "SesCoreEmail", "Effect": "Allow",
+      "Action": ["ses:*"],
+      "Resource": ["*"] },
+    { "Sid": "SqsCoreQueues", "Effect": "Allow",
+      "Action": ["sqs:*"],
+      "Resource": ["arn:${PARTITION}:sqs:*:${ACCOUNT_ID}:*"] },
     { "Sid": "S3AccountPublicAccessBlock", "Effect": "Allow",
       "Action": ["s3:GetAccountPublicAccessBlock","s3:PutAccountPublicAccessBlock"],
       "Resource": ["*"] },
