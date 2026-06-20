@@ -9,6 +9,7 @@ resource "aws_iam_role_policy" "three_am_deployment_apps" {
 
 data "aws_iam_policy_document" "deployment_permissions_apps" {
   # terraform-aws-modules/lambda looks up AWS-managed policy documents at plan time.
+  # policy/* does not match policy/service-role/* (IAM * does not span /).
   statement {
     sid    = "IamReadAwsManagedPolicies"
     effect = "Allow"
@@ -17,7 +18,12 @@ data "aws_iam_policy_document" "deployment_permissions_apps" {
       "iam:GetPolicyVersion",
       "iam:ListPolicyVersions",
     ]
-    resources = ["arn:${local.partition}:iam::aws:policy/*"]
+    resources = [
+      "arn:${local.partition}:iam::aws:policy/*",
+      "arn:${local.partition}:iam::aws:policy/service-role/*",
+      "arn:${local.partition}:iam::aws:policy/aws-service-role/*",
+      "arn:${local.partition}:iam::aws:policy/job-function/*",
+    ]
   }
 
   # App Lambdas use pki-*, authorizer-*, etc. (not the 3am-* prefix on -Permissions).

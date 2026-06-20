@@ -20,7 +20,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.9"
+BOOTSTRAP_VERSION="0.2.10"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-06-20"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
@@ -969,7 +969,10 @@ EOF
   "Statement": [
     { "Sid": "IamReadAwsManagedPolicies", "Effect": "Allow",
       "Action": ["iam:GetPolicy","iam:GetPolicyVersion","iam:ListPolicyVersions"],
-      "Resource": ["arn:${PARTITION}:iam::aws:policy/*"] },
+      "Resource": ["arn:${PARTITION}:iam::aws:policy/*",
+                   "arn:${PARTITION}:iam::aws:policy/service-role/*",
+                   "arn:${PARTITION}:iam::aws:policy/aws-service-role/*",
+                   "arn:${PARTITION}:iam::aws:policy/job-function/*"] },
     { "Sid": "LambdaOnAppFunctions", "Effect": "Allow",
       "Action": ["lambda:*"],
       "Resource": ["arn:${PARTITION}:lambda:*:${ACCOUNT_ID}:function:*"] },

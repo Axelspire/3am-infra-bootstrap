@@ -92,7 +92,8 @@ Three inline policies, all attached to the same role.
 
 ### `ThreeAM-Deployment-Permissions-Apps` [`iam-permissions-apps.tf`]
 
-- IAM read on AWS-managed policies (`iam:GetPolicy*` on `arn:aws:iam::aws:policy/*`).
+- IAM read on AWS-managed policies (`iam:GetPolicy*` on `arn:aws:iam::aws:policy/*` and
+  nested paths such as `policy/service-role/*`).
 - Lambda full access on all functions in the account (app stacks use `pki-*`, `authorizer-*`, …).
 - IAM full access on customer `role/*` and `policy/*` (Lambda execution roles).
 
