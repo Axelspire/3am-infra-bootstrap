@@ -1300,6 +1300,8 @@ phase5_put_drift_reader_policies () {
   aws iam put-role-policy --role-name "${DRIFT_READER_ROLE_NAME}" \
     --policy-name ThreeAM-DriftReader-State \
     --policy-document "file://${DRIFT_STATE_POLICY_FILE}" >/dev/null
+  log "  ThreeAM-DriftReader-State CI CMK = ${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"
+  log "  (must match 3am-deployments customers/<id>/customer.hcl bootstrap.artifact_kms_key_arn and CI key policy AllowCustomerDriftReaderDecrypt)"
 }
 
 phase5_put_cmk_policy () {
