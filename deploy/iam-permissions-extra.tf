@@ -57,6 +57,16 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
   # CloudWatch Logs on 3am-* log groups (Lambda log groups follow the
   # /aws/lambda/3am-* pattern; the module's own /3am/* hierarchy is
   # also covered).
+  #
+  # DescribeLogGroups is account-scoped (Resource "*") even when the API
+  # is called with logGroupNamePrefix — scoped log-group ARNs do not satisfy IAM.
+  statement {
+    sid       = "LogsDescribeLogGroups"
+    effect    = "Allow"
+    actions   = ["logs:DescribeLogGroups"]
+    resources = ["*"]
+  }
+
   statement {
     sid    = "LogsOn3amGroups"
     effect = "Allow"
@@ -64,7 +74,6 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
       "logs:CreateLogGroup",
       "logs:CreateLogStream",
       "logs:DeleteLogGroup",
-      "logs:DescribeLogGroups",
       "logs:DescribeLogStreams",
       "logs:PutLogEvents",
       "logs:PutRetentionPolicy",
