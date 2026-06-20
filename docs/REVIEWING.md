@@ -86,7 +86,9 @@ Three inline policies, all attached to the same role.
   `/3am-internal/*`, `/3am-core/*`, …). `DescribeParameters` on `Resource: "*"`.
 - CloudWatch Logs on `/aws/lambda/3am-*`, `/aws/lambda/pki-*`, and `/3am/*`
   log groups; account-scoped `CreateLogGroup`/`TagResource`.
-- API Gateway full CRUD on resources tagged `Service=3am`.
+- API Gateway full CRUD on resources tagged `Service=3am`, plus
+  `POST`/`TagResource` on the `/tags/*` sub-resource (first tag on an
+  untagged custom domain).
 - Route 53: `route53:*` read; `route53:Change*` on hosted zones (infra APIGW/ACM validation records).
 - ACM: list and request anywhere; describe/delete/tag on certificates
   tagged `Service=3am`.

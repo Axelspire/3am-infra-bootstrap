@@ -83,6 +83,20 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
     }
   }
 
+  # TagResource is apigateway:POST on /tags/{resourceArn}. IAM often does not
+  # evaluate aws:RequestTag on that sub-resource, so the first tag apply on an
+  # otherwise-untagged custom domain name fails the statements above.
+  statement {
+    sid    = "ApigatewayTagResourceEndpoint"
+    effect = "Allow"
+    actions = [
+      "apigateway:POST",
+      "apigateway:TagResource",
+      "apigateway:UntagResource",
+    ]
+    resources = ["arn:${local.partition}:apigateway:*::/tags/*"]
+  }
+
   statement {
     sid       = "Route53Read"
     effect    = "Allow"

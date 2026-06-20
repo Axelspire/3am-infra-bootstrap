@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.11"
+BOOTSTRAP_VERSION="0.2.12"
 BOOTSTRAP_VARIANT="multi-account"
 SCRIPT_LAST_UPDATED="2026-06-20"
 BOOTSTRAP_SCRIPT_NAME="customer-org-setup.sh"
@@ -1023,6 +1023,9 @@ EOF
       "Action": ["apigateway:*"],
       "Resource": ["arn:${PARTITION}:apigateway:*::/*"],
       "Condition": { "StringEquals": { "aws:ResourceTag/Service": "3am" } } },
+    { "Sid": "ApigatewayTagResourceEndpoint", "Effect": "Allow",
+      "Action": ["apigateway:POST","apigateway:TagResource","apigateway:UntagResource"],
+      "Resource": ["arn:${PARTITION}:apigateway:*::/tags/*"] },
     { "Sid": "Route53Read", "Effect": "Allow",
       "Action": ["route53:*"],
       "Resource": ["*"] },
