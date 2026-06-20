@@ -20,7 +20,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.5"
+BOOTSTRAP_VERSION="0.2.6"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-06-20"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
@@ -714,6 +714,17 @@ phase5_compute_axelspire_arns () {
 # Mirrors deploy/iam.tf, deploy/iam-permissions-ec2.tf,
 # deploy/iam-permissions-extra.tf, deploy/kms.tf and deploy/state-backend.tf.
 # Files are validated with python3 -m json.tool after generation.
+phase5_assert_inline_policy_sizes () {
+  local max=10240 f bytes
+  for f in "${PERMS_POLICY_FILE}" "${PERMS_EC2_FILE}" "${PERMS_EXTRA_FILE}" \
+           "${PERMS_ONBOARDING_FILE}" "${PERMS_INFRA_FILE}"; do
+    bytes=$(wc -c < "${f}" | tr -d ' ')
+    if [ "${bytes}" -gt "${max}" ]; then
+      die "inline policy ${f} is ${bytes} bytes (AWS PutRolePolicy limit ${max}) — split or shorten statements"
+    fi
+  done
+}
+
 phase5_write_policy_files () {
   local external_id="${1:-}" admin_arns_json="${2:-[]}"
   # Trust policy is split into two statements. sts:RoleSessionName and
@@ -824,11 +835,7 @@ EOF
   "Version": "2012-10-17",
   "Statement": [
     { "Sid": "Ec2VpcRead", "Effect": "Allow",
-      "Action": ["ec2:DescribeVpcs","ec2:DescribeVpcAttribute","ec2:DescribeSubnets","ec2:DescribeRouteTables",
-                 "ec2:DescribeNetworkInterfaces","ec2:DescribeSecurityGroups","ec2:DescribeInternetGateways",
-                 "ec2:DescribeNatGateways","ec2:DescribeAddresses","ec2:DescribeVpcEndpoints",
-                 "ec2:DescribeManagedPrefixLists","ec2:GetManagedPrefixListEntries","ec2:DescribeNetworkAcls",
-                 "ec2:DescribeFlowLogs","ec2:DescribeAvailabilityZones","ec2:DescribeRegions","ec2:DescribeAccountAttributes"],
+      "Action": ["ec2:Describe*","ec2:GetManagedPrefixListEntries"],
       "Resource": ["*"] },
     { "Sid": "Ec2SecurityGroupWriteOnTagged", "Effect": "Allow",
       "Action": ["ec2:AuthorizeSecurityGroupIngress","ec2:AuthorizeSecurityGroupEgress",
@@ -848,55 +855,37 @@ EOF
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Sid": "SsmReadOn3amParameters", "Effect": "Allow",
-      "Action": ["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath"],
+    { "Sid": "SsmOn3amParameters", "Effect": "Allow",
+      "Action": ["ssm:*"],
       "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am/*"] },
     { "Sid": "SsmDescribeParameters", "Effect": "Allow",
       "Action": ["ssm:DescribeParameters"],
       "Resource": ["*"] },
-    { "Sid": "SsmWriteOn3amParameters", "Effect": "Allow",
-      "Action": ["ssm:PutParameter","ssm:DeleteParameter","ssm:DeleteParameters",
-                 "ssm:AddTagsToResource","ssm:RemoveTagsFromResource","ssm:ListTagsForResource",
-                 "ssm:LabelParameterVersion"],
-      "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am/*"] },
-    { "Sid": "LogsDescribeLogGroups", "Effect": "Allow",
-      "Action": ["logs:DescribeLogGroups"],
-      "Resource": ["*"] },
-    { "Sid": "LogsCreateLogGroup", "Effect": "Allow",
-      "Action": ["logs:CreateLogGroup"],
+    { "Sid": "LogsAccountScope", "Effect": "Allow",
+      "Action": ["logs:DescribeLogGroups","logs:CreateLogGroup"],
       "Resource": ["*"] },
     { "Sid": "LogsOn3amGroups", "Effect": "Allow",
-      "Action": ["logs:CreateLogStream","logs:DeleteLogGroup",
-                 "logs:DescribeLogStreams","logs:PutLogEvents",
-                 "logs:PutRetentionPolicy","logs:TagResource","logs:UntagResource",
-                 "logs:ListTagsForResource","logs:AssociateKmsKey"],
+      "Action": ["logs:*"],
       "Resource": ["arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/3am-*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/lambda/3am-*:*",
                    "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/vpc/3am-*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/aws/vpc/3am-*:*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/3am/*",
-                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/3am/*:*"] },
-    { "Sid": "ApiGatewayCreateWith3amTag", "Effect": "Allow",
-      "Action": ["apigateway:POST","apigateway:TagResource"],
+                   "arn:${PARTITION}:logs:*:${ACCOUNT_ID}:log-group:/3am/*"] },
+    { "Sid": "ApigatewayCreateWith3amTag", "Effect": "Allow",
+      "Action": ["apigateway:*"],
       "Resource": ["arn:${PARTITION}:apigateway:*::/*"],
       "Condition": { "StringEquals": { "aws:RequestTag/Service": "3am" } } },
-    { "Sid": "ApiGatewayOnTaggedResources", "Effect": "Allow",
-      "Action": ["apigateway:GET","apigateway:POST","apigateway:PUT","apigateway:PATCH",
-                 "apigateway:DELETE","apigateway:TagResource","apigateway:UntagResource"],
+    { "Sid": "ApigatewayOnTaggedResources", "Effect": "Allow",
+      "Action": ["apigateway:*"],
       "Resource": ["arn:${PARTITION}:apigateway:*::/*"],
       "Condition": { "StringEquals": { "aws:ResourceTag/Service": "3am" } } },
     { "Sid": "Route53Read", "Effect": "Allow",
-      "Action": ["route53:ListHostedZones","route53:GetHostedZone",
-                 "route53:ListResourceRecordSets","route53:GetChange","route53:ListTagsForResource"],
+      "Action": ["route53:Get*","route53:List*"],
       "Resource": ["*"] },
     { "Sid": "Route53WriteOnTaggedZones", "Effect": "Allow",
       "Action": ["route53:ChangeResourceRecordSets","route53:ChangeTagsForResource"],
       "Resource": ["arn:${PARTITION}:route53:::hostedzone/*"],
       "Condition": { "StringEquals": { "aws:ResourceTag/3am-managed": "true" } } },
     { "Sid": "AcmOnTaggedCertificates", "Effect": "Allow",
-      "Action": ["acm:DescribeCertificate","acm:GetCertificate","acm:ListTagsForCertificate",
-                 "acm:DeleteCertificate","acm:AddTagsToCertificate","acm:RemoveTagsFromCertificate"],
-      "Resource": ["*"],
+      "Action": ["acm:*"], "Resource": ["*"],
       "Condition": { "StringEquals": { "aws:ResourceTag/Service": "3am" } } },
     { "Sid": "AcmListAndRequest", "Effect": "Allow",
       "Action": ["acm:ListCertificates","acm:RequestCertificate"], "Resource": ["*"] }
@@ -945,72 +934,36 @@ EOF
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Sid": "SsmReadOn3amInfraParameters", "Effect": "Allow",
-      "Action": ["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath"],
+    { "Sid": "SsmOn3amInfraParameters", "Effect": "Allow",
+      "Action": ["ssm:*"],
       "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am-infra/*"] },
-    { "Sid": "SsmWriteOn3amInfraParameters", "Effect": "Allow",
-      "Action": ["ssm:PutParameter","ssm:DeleteParameter","ssm:DeleteParameters",
-                 "ssm:AddTagsToResource","ssm:RemoveTagsFromResource","ssm:ListTagsForResource",
-                 "ssm:LabelParameterVersion"],
-      "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am-infra/*"] },
-    { "Sid": "Ec2NetworkingRead", "Effect": "Allow",
-      "Action": ["ec2:DescribeVpcs","ec2:DescribeVpcAttribute","ec2:DescribeSubnets","ec2:DescribeRouteTables",
-                 "ec2:DescribeNetworkInterfaces","ec2:DescribeSecurityGroups","ec2:DescribeInternetGateways",
-                 "ec2:DescribeNatGateways","ec2:DescribeAddresses","ec2:DescribeVpcEndpoints",
-                 "ec2:DescribeManagedPrefixLists","ec2:GetManagedPrefixListEntries","ec2:DescribeNetworkAcls",
-                 "ec2:DescribeFlowLogs","ec2:DescribeAvailabilityZones","ec2:DescribeRegions","ec2:DescribeAccountAttributes"],
-      "Resource": ["*"] },
     { "Sid": "Ec2NetworkingCreateWith3amTag", "Effect": "Allow",
-      "Action": ["ec2:CreateVpc","ec2:CreateSubnet","ec2:CreateInternetGateway","ec2:CreateRouteTable",
-                 "ec2:CreateRoute","ec2:AllocateAddress","ec2:CreateNatGateway","ec2:CreateVpcEndpoint",
-                 "ec2:CreateManagedPrefixList","ec2:CreateNetworkAcl","ec2:CreateNetworkAclEntry",
-                 "ec2:CreateSecurityGroup","ec2:CreateTags"],
+      "Action": ["ec2:Create*","ec2:AllocateAddress"],
       "Resource": ["*"],
       "Condition": { "StringEquals": { "aws:RequestTag/Service": "3am" } } },
     { "Sid": "Ec2NetworkingManageTagged", "Effect": "Allow",
-      "Action": ["ec2:DeleteVpc","ec2:ModifyVpcAttribute","ec2:DeleteSubnet","ec2:ModifySubnetAttribute",
-                 "ec2:DeleteInternetGateway","ec2:AttachInternetGateway","ec2:DetachInternetGateway",
-                 "ec2:DeleteRouteTable","ec2:CreateRoute","ec2:DeleteRoute","ec2:ReplaceRoute",
-                 "ec2:AssociateRouteTable","ec2:DisassociateRouteTable","ec2:ReleaseAddress",
-                 "ec2:DeleteNatGateway","ec2:DeleteVpcEndpoints","ec2:ModifyVpcEndpoint",
-                 "ec2:ModifyManagedPrefixList","ec2:DeleteManagedPrefixList",
-                 "ec2:DeleteNetworkAcl","ec2:DeleteNetworkAclEntry","ec2:ReplaceNetworkAclEntry",
-                 "ec2:AuthorizeSecurityGroupIngress","ec2:AuthorizeSecurityGroupEgress",
-                 "ec2:RevokeSecurityGroupIngress","ec2:RevokeSecurityGroupEgress",
-                 "ec2:DeleteSecurityGroup","ec2:CreateTags","ec2:DeleteTags"],
+      "Action": ["ec2:*"],
       "Resource": ["*"],
       "Condition": { "StringEquals": { "aws:ResourceTag/Service": "3am" } } },
     { "Sid": "Ec2FlowLogs", "Effect": "Allow",
       "Action": ["ec2:CreateFlowLogs","ec2:DeleteFlowLogs"],
       "Resource": ["*"] },
     { "Sid": "IamManage3amScopedPoliciesAndRoles", "Effect": "Allow",
-      "Action": ["iam:CreatePolicy","iam:DeletePolicy","iam:GetPolicy","iam:GetPolicyVersion",
-                 "iam:CreatePolicyVersion","iam:DeletePolicyVersion","iam:ListPolicyVersions",
-                 "iam:TagPolicy","iam:UntagPolicy","iam:ListPolicyTags",
-                 "iam:CreateRole","iam:DeleteRole","iam:GetRole","iam:UpdateRole","iam:UpdateAssumeRolePolicy",
-                 "iam:PassRole","iam:AttachRolePolicy","iam:DetachRolePolicy","iam:PutRolePolicy",
-                 "iam:DeleteRolePolicy","iam:GetRolePolicy","iam:TagRole","iam:UntagRole","iam:ListRoleTags",
-                 "iam:ListAttachedRolePolicies","iam:ListRolePolicies"],
+      "Action": ["iam:*"],
       "Resource": ["arn:${PARTITION}:iam::${ACCOUNT_ID}:policy/3am-*",
                    "arn:${PARTITION}:iam::${ACCOUNT_ID}:role/3am-*"] },
     { "Sid": "EventsListRules", "Effect": "Allow",
       "Action": ["events:ListRules"],
       "Resource": ["*"] },
     { "Sid": "EventsOn3amRules", "Effect": "Allow",
-      "Action": ["events:PutRule","events:DeleteRule","events:DescribeRule","events:EnableRule",
-                 "events:DisableRule","events:PutTargets","events:RemoveTargets","events:ListTargetsByRule",
-                 "events:TagResource","events:UntagResource","events:ListTagsForResource"],
+      "Action": ["events:*"],
       "Resource": ["arn:${PARTITION}:events:*:${ACCOUNT_ID}:rule/3am-*"] },
     { "Sid": "KmsCreate3amTaggedKeys", "Effect": "Allow",
       "Action": ["kms:CreateKey","kms:TagResource"],
       "Resource": ["*"],
       "Condition": { "StringEquals": { "aws:RequestTag/Service": "3am" } } },
     { "Sid": "KmsManage3amTaggedKeys", "Effect": "Allow",
-      "Action": ["kms:CreateAlias","kms:DeleteAlias","kms:UpdateAlias","kms:ListAliases",
-                 "kms:PutKeyPolicy","kms:GetKeyPolicy","kms:EnableKeyRotation","kms:DisableKey",
-                 "kms:EnableKey","kms:ScheduleKeyDeletion","kms:CancelKeyDeletion","kms:UntagResource",
-                 "kms:ListResourceTags","kms:Encrypt","kms:Decrypt","kms:ReEncryptFrom","kms:ReEncryptTo",
-                 "kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext","kms:DescribeKey"],
+      "Action": ["kms:*"],
       "Resource": ["*"],
       "Condition": { "StringEquals": { "aws:ResourceTag/Service": "3am" } } }
   ]
@@ -1120,6 +1073,8 @@ EOF
   ]
 }
 EOF
+
+  phase5_assert_inline_policy_sizes
 
   if command -v python3 >/dev/null 2>&1; then
     local f

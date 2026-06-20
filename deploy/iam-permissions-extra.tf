@@ -8,7 +8,8 @@
 #   - Resource ARN patterns matching 3am-* wherever supported.
 #   - aws:ResourceTag / aws:RequestTag conditions for resource types
 #     that don't accept ARN patterns.
-#   - No iam:*, no organizations:*, no broad s3:* or ec2:* anywhere.
+#   - Service-level action wildcards (ssm:*, logs:*, …) only where
+#     resource ARNs or tag conditions keep the blast radius narrow.
 
 resource "aws_iam_role_policy" "three_am_deployment_extra" {
   name   = "ThreeAM-Deployment-Permissions-Extra"
@@ -17,19 +18,13 @@ resource "aws_iam_role_policy" "three_am_deployment_extra" {
 }
 
 data "aws_iam_policy_document" "deployment_permissions_extra" {
-  # SSM read on /3am/* parameters.
   statement {
-    sid    = "SsmReadOn3amParameters"
-    effect = "Allow"
-    actions = [
-      "ssm:GetParameter",
-      "ssm:GetParameters",
-      "ssm:GetParametersByPath",
-    ]
+    sid       = "SsmOn3amParameters"
+    effect    = "Allow"
+    actions   = ["ssm:*"]
     resources = ["arn:${local.partition}:ssm:*:${local.account_id}:parameter/3am/*"]
   }
 
-  # DescribeParameters cannot be scoped to parameter ARNs.
   statement {
     sid       = "SsmDescribeParameters"
     effect    = "Allow"
@@ -37,77 +32,29 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
     resources = ["*"]
   }
 
-  # SSM write on /3am/* parameters (downstream stacks publish their
-  # outputs here).
+  # DescribeLogGroups / CreateLogGroup require Resource "*" (see AWS CWL IAM docs).
   statement {
-    sid    = "SsmWriteOn3amParameters"
-    effect = "Allow"
-    actions = [
-      "ssm:PutParameter",
-      "ssm:DeleteParameter",
-      "ssm:DeleteParameters",
-      "ssm:AddTagsToResource",
-      "ssm:RemoveTagsFromResource",
-      "ssm:ListTagsForResource",
-      "ssm:LabelParameterVersion",
-    ]
-    resources = ["arn:${local.partition}:ssm:*:${local.account_id}:parameter/3am/*"]
-  }
-
-  # CloudWatch Logs on 3am-* log groups (Lambda log groups follow the
-  # /aws/lambda/3am-* pattern; the module's own /3am/* hierarchy is
-  # also covered).
-  #
-  # DescribeLogGroups is account-scoped (Resource "*") even when the API
-  # is called with logGroupNamePrefix — scoped log-group ARNs do not satisfy IAM.
-  statement {
-    sid       = "LogsDescribeLogGroups"
+    sid       = "LogsAccountScope"
     effect    = "Allow"
-    actions   = ["logs:DescribeLogGroups"]
-    resources = ["*"]
-  }
-
-  # CreateLogGroup is also evaluated without a resolvable log-group ARN (the
-  # group does not exist yet). Scoped log-group patterns such as
-  # /aws/vpc/3am-* do not satisfy IAM during CreateLogGroup.
-  statement {
-    sid       = "LogsCreateLogGroup"
-    effect    = "Allow"
-    actions   = ["logs:CreateLogGroup"]
+    actions   = ["logs:DescribeLogGroups", "logs:CreateLogGroup"]
     resources = ["*"]
   }
 
   statement {
-    sid    = "LogsOn3amGroups"
-    effect = "Allow"
-    actions = [
-      "logs:CreateLogStream",
-      "logs:DeleteLogGroup",
-      "logs:DescribeLogStreams",
-      "logs:PutLogEvents",
-      "logs:PutRetentionPolicy",
-      "logs:TagResource",
-      "logs:UntagResource",
-      "logs:ListTagsForResource",
-      "logs:AssociateKmsKey",
-    ]
+    sid       = "LogsOn3amGroups"
+    effect    = "Allow"
+    actions   = ["logs:*"]
     resources = [
       "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/3am-*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/lambda/3am-*:*",
       "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/vpc/3am-*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/aws/vpc/3am-*:*",
       "arn:${local.partition}:logs:*:${local.account_id}:log-group:/3am/*",
-      "arn:${local.partition}:logs:*:${local.account_id}:log-group:/3am/*:*",
     ]
   }
 
   statement {
-    sid    = "ApiGatewayCreateWith3amTag"
-    effect = "Allow"
-    actions = [
-      "apigateway:POST",
-      "apigateway:TagResource",
-    ]
+    sid       = "ApigatewayCreateWith3amTag"
+    effect    = "Allow"
+    actions   = ["apigateway:*"]
     resources = ["arn:${local.partition}:apigateway:*::/*"]
     condition {
       test     = "StringEquals"
@@ -116,19 +63,10 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
     }
   }
 
-  # API Gateway: deploy / manage APIs tagged Service=3am.
   statement {
-    sid    = "ApiGatewayOnTaggedResources"
-    effect = "Allow"
-    actions = [
-      "apigateway:GET",
-      "apigateway:POST",
-      "apigateway:PUT",
-      "apigateway:PATCH",
-      "apigateway:DELETE",
-      "apigateway:TagResource",
-      "apigateway:UntagResource",
-    ]
+    sid       = "ApigatewayOnTaggedResources"
+    effect    = "Allow"
+    actions   = ["apigateway:*"]
     resources = ["arn:${local.partition}:apigateway:*::/*"]
     condition {
       test     = "StringEquals"
@@ -137,18 +75,10 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
     }
   }
 
-  # Route 53: read on hosted zones; write only on zones tagged
-  # 3am-managed=true.
   statement {
-    sid    = "Route53Read"
-    effect = "Allow"
-    actions = [
-      "route53:ListHostedZones",
-      "route53:GetHostedZone",
-      "route53:ListResourceRecordSets",
-      "route53:GetChange",
-      "route53:ListTagsForResource",
-    ]
+    sid       = "Route53Read"
+    effect    = "Allow"
+    actions   = ["route53:Get*", "route53:List*"]
     resources = ["*"]
   }
 
@@ -167,19 +97,10 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
     }
   }
 
-  # ACM on certificates tagged Service=3am, plus list/request which
-  # don't support resource-level tags.
   statement {
-    sid    = "AcmOnTaggedCertificates"
-    effect = "Allow"
-    actions = [
-      "acm:DescribeCertificate",
-      "acm:GetCertificate",
-      "acm:ListTagsForCertificate",
-      "acm:DeleteCertificate",
-      "acm:AddTagsToCertificate",
-      "acm:RemoveTagsFromCertificate",
-    ]
+    sid       = "AcmOnTaggedCertificates"
+    effect    = "Allow"
+    actions   = ["acm:*"]
     resources = ["*"]
     condition {
       test     = "StringEquals"
@@ -189,12 +110,9 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
   }
 
   statement {
-    sid    = "AcmListAndRequest"
-    effect = "Allow"
-    actions = [
-      "acm:ListCertificates",
-      "acm:RequestCertificate",
-    ]
+    sid       = "AcmListAndRequest"
+    effect    = "Allow"
+    actions   = ["acm:ListCertificates", "acm:RequestCertificate"]
     resources = ["*"]
   }
 }

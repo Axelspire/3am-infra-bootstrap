@@ -16,11 +16,11 @@ After this module is applied, AxelSpire holds:
   admin roles and the account root can manage the key [`kms.tf` →
   `data.aws_iam_policy_document.cmk`, statements 1 and 2]. AxelSpire's
   grant is data-plane only [statement 3].
-- **No `iam:*`, no `organizations:*`, no broad `s3:*` or `ec2:*`.** The
-  full permission surface is the union of three inline policies
-  [`iam.tf`, `iam-permissions-ec2.tf`, `iam-permissions-extra.tf`]. Each
-  statement is scoped by ARN prefix `3am-*` or by resource tag
-  `Service=3am`.
+- **No `organizations:*`, no broad untagged `s3:*` or `ec2:*`.** The
+  full permission surface is the union of inline policies on
+  `ThreeAM-Deployment`. Service wildcards (`ssm:*`, `logs:*`, `iam:*` on
+  `3am-*` ARNs, `ec2:*` on resources tagged `Service=3am`, etc.) replace
+  long action lists where tag or ARN scoping keeps blast radius narrow.
 - **No ability to assume the role outside the AxelSpire CI account.** The
   trust policy names exactly one principal: the
   `GitHubActions-CustomerDeploy` role in the AxelSpire CI account

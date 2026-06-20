@@ -14,23 +14,8 @@ data "aws_iam_policy_document" "deployment_permissions_ec2" {
     sid    = "Ec2VpcRead"
     effect = "Allow"
     actions = [
-      "ec2:DescribeVpcs",
-      "ec2:DescribeVpcAttribute",
-      "ec2:DescribeSubnets",
-      "ec2:DescribeRouteTables",
-      "ec2:DescribeNetworkInterfaces",
-      "ec2:DescribeSecurityGroups",
-      "ec2:DescribeInternetGateways",
-      "ec2:DescribeNatGateways",
-      "ec2:DescribeAddresses",
-      "ec2:DescribeVpcEndpoints",
-      "ec2:DescribeManagedPrefixLists",
+      "ec2:Describe*",
       "ec2:GetManagedPrefixListEntries",
-      "ec2:DescribeNetworkAcls",
-      "ec2:DescribeFlowLogs",
-      "ec2:DescribeAvailabilityZones",
-      "ec2:DescribeRegions",
-      "ec2:DescribeAccountAttributes",
     ]
     resources = ["*"]
   }
