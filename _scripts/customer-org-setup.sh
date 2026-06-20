@@ -972,7 +972,8 @@ EOF
       "Resource": ["*"] },
     { "Sid": "SsmWriteOn3amParameters", "Effect": "Allow",
       "Action": ["ssm:PutParameter","ssm:DeleteParameter","ssm:DeleteParameters",
-                 "ssm:AddTagsToResource","ssm:RemoveTagsFromResource","ssm:LabelParameterVersion"],
+                 "ssm:AddTagsToResource","ssm:RemoveTagsFromResource","ssm:ListTagsForResource",
+                 "ssm:LabelParameterVersion"],
       "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am/*"] },
     { "Sid": "LogsOn3amGroups", "Effect": "Allow",
       "Action": ["logs:CreateLogGroup","logs:CreateLogStream","logs:DeleteLogGroup",
@@ -1034,7 +1035,7 @@ EOF
       "Resource": ["*"] },
     { "Sid": "SsmWriteOnboardingParameters", "Effect": "Allow",
       "Action": ["ssm:PutParameter","ssm:DeleteParameter","ssm:DeleteParameters",
-                 "ssm:AddTagsToResource","ssm:RemoveTagsFromResource",
+                 "ssm:AddTagsToResource","ssm:RemoveTagsFromResource","ssm:ListTagsForResource",
                  "ssm:GetParameter","ssm:GetParameters",
                  "ssm:GetParametersByPath"],
       "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am/*"] }
@@ -1065,6 +1066,17 @@ EOF
       "Condition": {
         "StringEquals": {
           "kms:ViaService": "lambda.${DEPLOYMENT_REGION}.amazonaws.com",
+          "kms:CallerAccount": "${ACCOUNT_ID}"
+        }
+      } },
+    { "Sid": "AllowS3ServiceUseInThisAccount", "Effect": "Allow",
+      "Principal": { "Service": "s3.amazonaws.com" },
+      "Action": ["kms:Encrypt","kms:Decrypt","kms:ReEncryptFrom","kms:ReEncryptTo",
+                 "kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext","kms:DescribeKey"],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.${DEPLOYMENT_REGION}.amazonaws.com",
           "kms:CallerAccount": "${ACCOUNT_ID}"
         }
       } }
@@ -1099,6 +1111,17 @@ EOF
       "Condition": {
         "StringEquals": {
           "kms:ViaService": "lambda.${DEPLOYMENT_REGION}.amazonaws.com",
+          "kms:CallerAccount": "${ACCOUNT_ID}"
+        }
+      } },
+    { "Sid": "AllowS3ServiceUseInThisAccount", "Effect": "Allow",
+      "Principal": { "Service": "s3.amazonaws.com" },
+      "Action": ["kms:Encrypt","kms:Decrypt","kms:ReEncryptFrom","kms:ReEncryptTo",
+                 "kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext","kms:DescribeKey"],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.${DEPLOYMENT_REGION}.amazonaws.com",
           "kms:CallerAccount": "${ACCOUNT_ID}"
         }
       } }

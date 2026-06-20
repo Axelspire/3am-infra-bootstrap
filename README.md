@@ -762,6 +762,23 @@ cat > /tmp/kms-policy.json <<EOF
           "kms:CallerAccount":  "${ACCOUNT_ID}"
         }
       }
+    },
+    {
+      "Sid": "AllowS3ServiceUseInThisAccount",
+      "Effect": "Allow",
+      "Principal": {"Service": "s3.amazonaws.com"},
+      "Action": [
+        "kms:Encrypt","kms:Decrypt","kms:ReEncryptFrom","kms:ReEncryptTo",
+        "kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext",
+        "kms:DescribeKey"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService":     "s3.${AWS_REGION}.amazonaws.com",
+          "kms:CallerAccount":  "${ACCOUNT_ID}"
+        }
+      }
     }
   ]
 }
@@ -1247,6 +1264,27 @@ omits `sts:TagSession`. The deploy chain in
            "ssm:PutParameter"
          ],
          "Resource": "arn:aws:ssm:eu-west-1:033113129683:parameter/3am/pending-approvals/*"
+       },
+       {
+         "Sid": "SignAuditReceipts",
+         "Effect": "Allow",
+         "Action": [
+           "kms:Sign",
+           "kms:DescribeKey",
+           "kms:GetPublicKey"
+         ],
+         "Resource": "arn:aws:kms:eu-west-1:033113129683:key/*",
+         "Condition": {
+           "ForAnyValue:StringLike": {
+             "kms:ResourceAliases": "alias/3am-ci/audit-receipt-signing"
+           }
+         }
+       },
+       {
+         "Sid": "ReadAuditReceiptSigningKeyArn",
+         "Effect": "Allow",
+         "Action": "ssm:GetParameter",
+         "Resource": "arn:aws:ssm:eu-west-1:033113129683:parameter/3am/ci/audit-receipt-signing-key-arn"
        }
      ]
    }
@@ -1274,7 +1312,8 @@ aws iam get-role-policy \
 # expect: ["AssumeCustomerDeploymentRole","TagCustomerDeploymentSession",
 #          "ReadWriteCustomerState","LockCustomerState","UseAxelspireCiKeys",
 #          "ReadCustomerExternalId","ReadEnvDnsZoneSsm",
-#          "DelegateCustomerSubzones","WritePendingApprovalHashes"]
+#          "DelegateCustomerSubzones","WritePendingApprovalHashes",
+#          "SignAuditReceipts","ReadAuditReceiptSigningKeyArn"]
 ```
 
 **Already provisioned with the original six-statement policy?** Replace the

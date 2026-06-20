@@ -25,9 +25,16 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
       "ssm:GetParameter",
       "ssm:GetParameters",
       "ssm:GetParametersByPath",
-      "ssm:DescribeParameters",
     ]
     resources = ["arn:${local.partition}:ssm:*:${local.account_id}:parameter/3am/*"]
+  }
+
+  # DescribeParameters cannot be scoped to parameter ARNs.
+  statement {
+    sid       = "SsmDescribeParameters"
+    effect    = "Allow"
+    actions   = ["ssm:DescribeParameters"]
+    resources = ["*"]
   }
 
   # SSM write on /3am/* parameters (downstream stacks publish their
@@ -41,6 +48,7 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
       "ssm:DeleteParameters",
       "ssm:AddTagsToResource",
       "ssm:RemoveTagsFromResource",
+      "ssm:ListTagsForResource",
       "ssm:LabelParameterVersion",
     ]
     resources = ["arn:${local.partition}:ssm:*:${local.account_id}:parameter/3am/*"]

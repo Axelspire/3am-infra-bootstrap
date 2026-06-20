@@ -82,7 +82,8 @@ Three inline policies, all attached to the same role.
 
 ### `ThreeAM-Deployment-Permissions-Extra` [`iam-permissions-extra.tf`]
 
-- SSM read/write on `/3am/*` parameters only.
+- SSM read/write on `/3am/*` parameters only (`DescribeParameters` on
+  `Resource: "*"`; `ListTagsForResource` on parameter ARNs).
 - CloudWatch Logs on `/aws/lambda/3am-*` and `/3am/*` log groups only.
 - API Gateway full CRUD on resources tagged `Service=3am`.
 - Route 53: read everywhere; write only on hosted zones tagged
@@ -92,7 +93,7 @@ Three inline policies, all attached to the same role.
 
 ## 4. CMK policy walkthrough
 
-Four statements [`kms.tf`]:
+Five statements [`kms.tf`]:
 
 1. **Account root** — full `kms:*`. Standard "self" statement; required
    by AWS so the customer cannot lock themselves out.
@@ -104,6 +105,10 @@ Four statements [`kms.tf`]:
    conditioned on `kms:ViaService = lambda.<region>.amazonaws.com` and
    `kms:CallerAccount = <this account>`. Required to use the CMK as the
    environment-variable encryption key for 3AM Lambdas.
+5. **S3 service principal** — same data-plane actions as Lambda, but
+   `kms:ViaService = s3.<region>.amazonaws.com`. Required for SSE-KMS
+   buckets (audit bucket, application data) without granting
+   `kms:CreateGrant` on the deployment role.
 
 ## 5. Audit & detection
 

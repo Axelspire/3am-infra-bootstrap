@@ -26,7 +26,7 @@ resource "aws_kms_alias" "three_am" {
 # ------------------------------------------------------------------ #
 # Key policy
 # ------------------------------------------------------------------ #
-# Four logical statements:
+# Five logical statements:
 #   1. Account root: full kms:* (the standard "self" statement; without
 #      this the customer can lock themselves out of their own key).
 #   2. Customer admin roles: full key management.
@@ -34,6 +34,9 @@ resource "aws_kms_alias" "three_am" {
 #   4. Lambda service principal in this account, scoped via the
 #      kms:ViaService condition, so the key can be used as the CMK for
 #      Lambda environment variables and dead-letter queues.
+#   5. S3 service principal in this account/region, scoped via
+#      kms:ViaService, so SSE-KMS buckets (audit bucket, application
+#      data) can use the CMK without kms:CreateGrant on the role.
 
 data "aws_iam_policy_document" "cmk" {
   statement {
@@ -117,6 +120,35 @@ data "aws_iam_policy_document" "cmk" {
       test     = "StringEquals"
       variable = "kms:ViaService"
       values   = ["lambda.${local.region}.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "kms:CallerAccount"
+      values   = [local.account_id]
+    }
+  }
+
+  statement {
+    sid    = "AllowS3ServiceUseInThisAccount"
+    effect = "Allow"
+    actions = [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncryptFrom",
+      "kms:ReEncryptTo",
+      "kms:GenerateDataKey",
+      "kms:GenerateDataKeyWithoutPlaintext",
+      "kms:DescribeKey",
+    ]
+    principals {
+      type        = "Service"
+      identifiers = ["s3.amazonaws.com"]
+    }
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["s3.${local.region}.amazonaws.com"]
     }
     condition {
       test     = "StringEquals"
