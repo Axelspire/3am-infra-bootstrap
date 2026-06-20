@@ -55,6 +55,7 @@ data "aws_iam_policy_document" "deployment_permissions_apps" {
       "s3:DeleteBucket",
       "s3:PutBucketAcl",
       "s3:PutBucketPolicy",
+      "s3:DeleteBucketPolicy",
       "s3:PutBucketPublicAccessBlock",
       "s3:PutBucketOwnershipControls",
       "s3:PutBucketVersioning",

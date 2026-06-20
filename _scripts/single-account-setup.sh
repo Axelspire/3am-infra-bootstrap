@@ -20,7 +20,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.12"
+BOOTSTRAP_VERSION="0.2.13"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-06-20"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
@@ -905,7 +905,7 @@ EOF
   "Statement": [
     { "Sid": "S3CreateAndManageAuditBucket", "Effect": "Allow",
       "Action": [
-        "s3:CreateBucket","s3:DeleteBucket","s3:PutBucketAcl","s3:PutBucketPolicy",
+        "s3:CreateBucket","s3:DeleteBucket","s3:PutBucketAcl","s3:PutBucketPolicy","s3:DeleteBucketPolicy",
         "s3:PutBucketPublicAccessBlock","s3:PutBucketOwnershipControls","s3:PutBucketVersioning",
         "s3:PutEncryptionConfiguration","s3:PutLifecycleConfiguration","s3:PutBucketObjectLockConfiguration",
         "s3:PutBucketTagging",
@@ -987,7 +987,7 @@ EOF
                    "arn:${PARTITION}:iam::${ACCOUNT_ID}:policy/*"] },
     { "Sid": "S3CreateAndManageAppBuckets", "Effect": "Allow",
       "Action": [
-        "s3:CreateBucket","s3:DeleteBucket","s3:PutBucketAcl","s3:PutBucketPolicy",
+        "s3:CreateBucket","s3:DeleteBucket","s3:PutBucketAcl","s3:PutBucketPolicy","s3:DeleteBucketPolicy",
         "s3:PutBucketPublicAccessBlock","s3:PutBucketOwnershipControls","s3:PutBucketVersioning",
         "s3:PutEncryptionConfiguration","s3:PutLifecycleConfiguration","s3:PutBucketObjectLockConfiguration",
         "s3:PutBucketTagging",
