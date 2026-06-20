@@ -86,8 +86,7 @@ Three inline policies, all attached to the same role.
   `Resource: "*"`; `ListTagsForResource` on parameter ARNs).
 - CloudWatch Logs on `/aws/lambda/3am-*` and `/3am/*` log groups only.
 - API Gateway full CRUD on resources tagged `Service=3am`.
-- Route 53: read everywhere; write only on hosted zones tagged
-  `3am-managed=true`.
+- Route 53: `route53:*` read; `route53:Change*` on hosted zones (infra APIGW/ACM validation records).
 - ACM: list and request anywhere; describe/delete/tag on certificates
   tagged `Service=3am`.
 

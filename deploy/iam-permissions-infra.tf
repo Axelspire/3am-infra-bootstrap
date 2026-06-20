@@ -16,53 +16,13 @@ data "aws_iam_policy_document" "deployment_permissions_infra" {
     resources = ["arn:${local.partition}:ssm:*:${local.account_id}:parameter/3am-infra/*"]
   }
 
+  # Infra VPC apply uses inline routes, IGW attach, NACL association, and
+  # flow logs where tag-based authorization does not match (default NACL,
+  # route-table routes, etc.). Scoped to this inline policy only.
   statement {
-    sid    = "Ec2NetworkingCreateWith3amTag"
-    effect = "Allow"
-    actions = [
-      "ec2:Create*",
-      "ec2:AllocateAddress",
-    ]
-    resources = ["*"]
-    condition {
-      test     = "StringEquals"
-      variable = "aws:RequestTag/Service"
-      values   = ["3am"]
-    }
-  }
-
-  statement {
-    sid       = "Ec2NetworkingManageTagged"
+    sid       = "Ec2InfraVpc"
     effect    = "Allow"
     actions   = ["ec2:*"]
-    resources = ["*"]
-    condition {
-      test     = "StringEquals"
-      variable = "aws:ResourceTag/Service"
-      values   = ["3am"]
-    }
-  }
-
-  statement {
-    sid    = "Ec2FlowLogs"
-    effect = "Allow"
-    actions = [
-      "ec2:CreateFlowLogs",
-      "ec2:DeleteFlowLogs",
-    ]
-    resources = ["*"]
-  }
-
-  # NACL/subnet association replaces the VPC default NACL (untagged); cannot
-  # require aws:ResourceTag/Service=3am on the authorization resource.
-  statement {
-    sid    = "Ec2NaclAssociations"
-    effect = "Allow"
-    actions = [
-      "ec2:ReplaceNetworkAclAssociation",
-      "ec2:AssociateNetworkAclSubnet",
-      "ec2:DisassociateNetworkAclSubnet",
-    ]
     resources = ["*"]
   }
 
@@ -105,38 +65,22 @@ data "aws_iam_policy_document" "deployment_permissions_infra" {
     }
   }
 
+  # ListAliases is account-scoped (Resource "*"). Key/alias data-plane and
+  # management for the infra CMK use alias/3am-* and key/* patterns.
   statement {
-    sid    = "KmsCreate3amAliases"
-    effect = "Allow"
-    actions = ["kms:CreateAlias"]
-    resources = [
-      "arn:${local.partition}:kms:*:${local.account_id}:alias/3am-*",
-      "arn:${local.partition}:kms:*:${local.account_id}:key/*",
-    ]
+    sid       = "KmsListAccountScope"
+    effect    = "Allow"
+    actions   = ["kms:ListAliases", "kms:ListKeys"]
+    resources = ["*"]
   }
 
   statement {
-    sid    = "KmsManage3amAliases"
-    effect = "Allow"
-    actions = [
-      "kms:UpdateAlias",
-      "kms:DeleteAlias",
-    ]
-    resources = [
-      "arn:${local.partition}:kms:*:${local.account_id}:alias/3am-*",
-      "arn:${local.partition}:kms:*:${local.account_id}:key/*",
-    ]
-  }
-
-  statement {
-    sid       = "KmsManage3amTaggedKeys"
+    sid       = "KmsOn3amKeysAndAliases"
     effect    = "Allow"
     actions   = ["kms:*"]
-    resources = ["*"]
-    condition {
-      test     = "StringEquals"
-      variable = "aws:ResourceTag/Service"
-      values   = ["3am"]
-    }
+    resources = [
+      "arn:${local.partition}:kms:*:${local.account_id}:alias/3am-*",
+      "arn:${local.partition}:kms:*:${local.account_id}:key/*",
+    ]
   }
 }

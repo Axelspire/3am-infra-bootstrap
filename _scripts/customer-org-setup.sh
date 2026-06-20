@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.7"
+BOOTSTRAP_VERSION="0.2.8"
 BOOTSTRAP_VARIANT="multi-account"
 SCRIPT_LAST_UPDATED="2026-06-20"
 BOOTSTRAP_SCRIPT_NAME="customer-org-setup.sh"
@@ -1021,12 +1021,11 @@ EOF
       "Resource": ["arn:${PARTITION}:apigateway:*::/*"],
       "Condition": { "StringEquals": { "aws:ResourceTag/Service": "3am" } } },
     { "Sid": "Route53Read", "Effect": "Allow",
-      "Action": ["route53:Get*","route53:List*"],
+      "Action": ["route53:*"],
       "Resource": ["*"] },
-    { "Sid": "Route53WriteOnTaggedZones", "Effect": "Allow",
-      "Action": ["route53:ChangeResourceRecordSets","route53:ChangeTagsForResource"],
-      "Resource": ["arn:${PARTITION}:route53:::hostedzone/*"],
-      "Condition": { "StringEquals": { "aws:ResourceTag/3am-managed": "true" } } },
+    { "Sid": "Route53WriteHostedZones", "Effect": "Allow",
+      "Action": ["route53:Change*"],
+      "Resource": ["arn:${PARTITION}:route53:::hostedzone/*"] },
     { "Sid": "AcmOnTaggedCertificates", "Effect": "Allow",
       "Action": ["acm:*"], "Resource": ["*"],
       "Condition": { "StringEquals": { "aws:ResourceTag/Service": "3am" } } },
@@ -1080,20 +1079,8 @@ EOF
     { "Sid": "SsmOn3amInfraParameters", "Effect": "Allow",
       "Action": ["ssm:*"],
       "Resource": ["arn:${PARTITION}:ssm:*:${ACCOUNT_ID}:parameter/3am-infra/*"] },
-    { "Sid": "Ec2NetworkingCreateWith3amTag", "Effect": "Allow",
-      "Action": ["ec2:Create*","ec2:AllocateAddress"],
-      "Resource": ["*"],
-      "Condition": { "StringEquals": { "aws:RequestTag/Service": "3am" } } },
-    { "Sid": "Ec2NetworkingManageTagged", "Effect": "Allow",
+    { "Sid": "Ec2InfraVpc", "Effect": "Allow",
       "Action": ["ec2:*"],
-      "Resource": ["*"],
-      "Condition": { "StringEquals": { "aws:ResourceTag/Service": "3am" } } },
-    { "Sid": "Ec2FlowLogs", "Effect": "Allow",
-      "Action": ["ec2:CreateFlowLogs","ec2:DeleteFlowLogs"],
-      "Resource": ["*"] },
-    { "Sid": "Ec2NaclAssociations", "Effect": "Allow",
-      "Action": ["ec2:ReplaceNetworkAclAssociation","ec2:AssociateNetworkAclSubnet",
-                 "ec2:DisassociateNetworkAclSubnet"],
       "Resource": ["*"] },
     { "Sid": "IamManage3amScopedPoliciesAndRoles", "Effect": "Allow",
       "Action": ["iam:*"],
@@ -1109,18 +1096,13 @@ EOF
       "Action": ["kms:CreateKey","kms:TagResource"],
       "Resource": ["*"],
       "Condition": { "StringEquals": { "aws:RequestTag/Service": "3am" } } },
-    { "Sid": "KmsCreate3amAliases", "Effect": "Allow",
-      "Action": ["kms:CreateAlias"],
-      "Resource": ["arn:${PARTITION}:kms:*:${ACCOUNT_ID}:alias/3am-*",
-                   "arn:${PARTITION}:kms:*:${ACCOUNT_ID}:key/*"] },
-    { "Sid": "KmsManage3amAliases", "Effect": "Allow",
-      "Action": ["kms:UpdateAlias","kms:DeleteAlias"],
-      "Resource": ["arn:${PARTITION}:kms:*:${ACCOUNT_ID}:alias/3am-*",
-                   "arn:${PARTITION}:kms:*:${ACCOUNT_ID}:key/*"] },
-    { "Sid": "KmsManage3amTaggedKeys", "Effect": "Allow",
+    { "Sid": "KmsListAccountScope", "Effect": "Allow",
+      "Action": ["kms:ListAliases","kms:ListKeys"],
+      "Resource": ["*"] },
+    { "Sid": "KmsOn3amKeysAndAliases", "Effect": "Allow",
       "Action": ["kms:*"],
-      "Resource": ["*"],
-      "Condition": { "StringEquals": { "aws:ResourceTag/Service": "3am" } } }
+      "Resource": ["arn:${PARTITION}:kms:*:${ACCOUNT_ID}:alias/3am-*",
+                   "arn:${PARTITION}:kms:*:${ACCOUNT_ID}:key/*"] }
   ]
 }
 EOF

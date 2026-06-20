@@ -78,23 +78,15 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
   statement {
     sid       = "Route53Read"
     effect    = "Allow"
-    actions   = ["route53:Get*", "route53:List*"]
+    actions   = ["route53:*"]
     resources = ["*"]
   }
 
   statement {
-    sid    = "Route53WriteOnTaggedZones"
-    effect = "Allow"
-    actions = [
-      "route53:ChangeResourceRecordSets",
-      "route53:ChangeTagsForResource",
-    ]
+    sid       = "Route53WriteHostedZones"
+    effect    = "Allow"
+    actions   = ["route53:Change*"]
     resources = ["arn:${local.partition}:route53:::hostedzone/*"]
-    condition {
-      test     = "StringEquals"
-      variable = "aws:ResourceTag/3am-managed"
-      values   = ["true"]
-    }
   }
 
   statement {
