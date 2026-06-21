@@ -96,4 +96,18 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
       values   = ["arn:${local.partition}:lambda:*:${local.account_id}:function:3am-*"]
     }
   }
+
+  # Tagging on event source mappings. lambda:FunctionArn is not a
+  # supported condition key for lambda:TagResource/UntagResource/ListTags
+  # against event-source-mapping resources, so scope by mapping ARN only.
+  statement {
+    sid    = "LambdaEventSourceMappingTagging"
+    effect = "Allow"
+    actions = [
+      "lambda:TagResource",
+      "lambda:UntagResource",
+      "lambda:ListTags",
+    ]
+    resources = ["arn:${local.partition}:lambda:*:${local.account_id}:event-source-mapping:*"]
+  }
 }

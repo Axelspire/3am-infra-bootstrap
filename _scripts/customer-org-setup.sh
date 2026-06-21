@@ -11,9 +11,9 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.19"
+BOOTSTRAP_VERSION="0.2.20"
 BOOTSTRAP_VARIANT="multi-account"
-SCRIPT_LAST_UPDATED="2026-06-20"
+SCRIPT_LAST_UPDATED="2026-06-21"
 BOOTSTRAP_SCRIPT_NAME="customer-org-setup.sh"
 BOOTSTRAP_REPO="${BOOTSTRAP_REPO:-Axelspire/3am-infra-bootstrap}"
 BOOTSTRAP_GIT_REF="${BOOTSTRAP_GIT_REF:-main}"
@@ -1021,7 +1021,10 @@ EOF
                  "lambda:ListEventSourceMappings"],
       "Resource": ["*"],
       "Condition": { "ArnLike": {
-        "lambda:FunctionArn": "arn:${PARTITION}:lambda:*:${ACCOUNT_ID}:function:3am-*" } } }
+        "lambda:FunctionArn": "arn:${PARTITION}:lambda:*:${ACCOUNT_ID}:function:3am-*" } } },
+    { "Sid": "LambdaEventSourceMappingTagging", "Effect": "Allow",
+      "Action": ["lambda:TagResource","lambda:UntagResource","lambda:ListTags"],
+      "Resource": ["arn:${PARTITION}:lambda:*:${ACCOUNT_ID}:event-source-mapping:*"] }
   ]
 }
 EOF
