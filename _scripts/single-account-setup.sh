@@ -20,7 +20,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.20"
+BOOTSTRAP_VERSION="0.2.21"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-06-21"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
@@ -966,6 +966,8 @@ EOF
     { "Effect": "Allow", "Action": ["ses:*"], "Resource": ["*"] },
     { "Effect": "Allow", "Action": ["sqs:*"],
       "Resource": ["arn:${PARTITION}:sqs:*:${ACCOUNT_ID}:*"] },
+    { "Sid": "DynamoDBOn3amTables", "Effect": "Allow", "Action": ["dynamodb:*"],
+      "Resource": ["arn:${PARTITION}:dynamodb:*:${ACCOUNT_ID}:table/3am-*"] },
     { "Effect": "Allow",
       "Action": ["s3:GetAccountPublicAccessBlock","s3:PutAccountPublicAccessBlock"],
       "Resource": ["*"] },

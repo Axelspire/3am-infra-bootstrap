@@ -5,11 +5,9 @@ AxelSpire's deployment pipeline. Applied exactly once per customer
 account, before any other 3AM stack can run.
 
 The recommended path is the **CloudShell setup script**: one `curl`,
-one `apply`, one JSON file to send to AxelSpire. The script produces
-the same end state as the [OpenTofu module in `deploy/`](deploy/), which
-remains available for customers that prefer to drive bootstrap through
-their existing IaC (see [Appendix A](#appendix-a--opentofu-module-optional))
-and is the canonical source for the
+one `apply`, one JSON file to send to AxelSpire. The scripts in
+[`_scripts/`](_scripts/) are the single source of truth for every
+resource this bootstrap creates and are the canonical reference for the
 [security review](docs/REVIEWING.md).
 
 - [Run the setup (CloudShell)](#run-the-setup-cloudshell)
@@ -18,10 +16,9 @@ and is the canonical source for the
 - [Hand-off to AxelSpire](#hand-off-to-axelspire)
 - [Verify the apply](#verify-the-apply)
 - [Reference](#reference) — what it creates, where it fits, security model
-- [Appendix A — OpenTofu module (optional)](#appendix-a--opentofu-module-optional)
-- [Appendix B — Manual AWS CLI walkthrough (reference only)](#appendix-b--manual-aws-cli-walkthrough-reference-only)
-- [Appendix C — AxelSpire CI role (informational)](#appendix-c--axelspire-ci-role-informational)
-- [Appendix D — AxelSpire CI CMK (informational)](#appendix-d--axelspire-ci-cmk-informational)
+- [Appendix A — Manual AWS CLI walkthrough (reference only)](#appendix-a--manual-aws-cli-walkthrough-reference-only)
+- [Appendix B — AxelSpire CI role (informational)](#appendix-b--axelspire-ci-role-informational)
+- [Appendix C — AxelSpire CI CMK (informational)](#appendix-c--axelspire-ci-cmk-informational)
 
 ---
 
@@ -464,12 +461,12 @@ involving AxelSpire.
 
 | Pattern | Who runs it | When it is appropriate |
 |---|---|---|
-| **Customer-applied** | The customer's platform team, with their own admin credentials, into an account in the customer's AWS Organization. | Default. The customer's security policy requires that no third party perform the initial setup. See [`examples/customer-applied/`](examples/customer-applied/). |
-| **AxelSpire-provisioned** | AxelSpire, into a newly-created AWS account inside the AxelSpire AWS Organization. After bootstrap, the account is invited into the customer's Organization and ownership is transferred. | Optional "managed onboarding" — customer does not have to drive the account-vending process. See [`examples/axelspire-provisioned/`](examples/axelspire-provisioned/). |
+| **Customer-applied** | The customer's platform team, with their own admin credentials, into an account in the customer's AWS Organization. | Default. The customer's security policy requires that no third party perform the initial setup. Use `customer-org-setup.sh` (multi-account) or `single-account-setup.sh`. |
+| **AxelSpire-provisioned** | AxelSpire, into a newly-created AWS account inside the AxelSpire AWS Organization. After bootstrap, the account is invited into the customer's Organization and ownership is transferred. | Optional "managed onboarding" — customer does not have to drive the account-vending process. |
 
 In both patterns the apply runs **inside the target customer account**.
 The AxelSpire CI account is a `Principal` in the role's trust policy,
-not a runner of this module.
+not a runner of this script.
 
 ### What it creates
 
@@ -502,27 +499,6 @@ Phase 2  3am-infra, 3am-core, 3am-ocsp, 3am-datasink
 See [`3AM_PROJECTS_OVERVIEW.md`](../3AM_PROJECTS_OVERVIEW.md) for the full
 dependency map.
 
-### Inputs and outputs (Appendix A)
-
-See [`deploy/variables.tf`](deploy/variables.tf) and
-[`deploy/outputs.tf`](deploy/outputs.tf). The most important ones:
-
-| Input | Required | Default |
-|---|:---:|---|
-| `customer_id` | ✅ | — |
-| `axelspire_ci_account_id` | ✅ | — |
-| `axelspire_artifact_kms_key_arn` | ✅ | — |
-| `axelspire_artifact_s3_bucket_arn` | ✅ | — |
-| `axelspire_ci_role_name` |  | `GitHubActions-CustomerDeploy` |
-| `external_id_secret_arn` |  | `null` |
-| `customer_admin_role_arns` |  | `[]` |
-| `require_license_session_tag` |  | `true` |
-| `kms_key_rotation_enabled` |  | `true` |
-| `kms_multi_region` |  | `false` |
-
-`output.handoff_values` is the convenience bundle to share with AxelSpire
-(deployment role ARN, CMK ARN, state bucket, lock table, region).
-
 ### Security model
 
 - Every resource is owned by the customer account. Revocation requires no
@@ -539,10 +515,12 @@ See [`deploy/variables.tf`](deploy/variables.tf) and
   (`Encrypt`, `Decrypt`, `GenerateDataKey`, `DescribeKey`). Key management
   (rotate, disable, modify policy) stays with the customer.
 
-A security reviewer should be able to read this README,
-[`docs/REVIEWING.md`](docs/REVIEWING.md), [`deploy/iam.tf`](deploy/iam.tf)
-and [`deploy/kms.tf`](deploy/kms.tf) in about 30 minutes and produce an
-informed approval decision.
+A security reviewer should be able to read this README and
+[`docs/REVIEWING.md`](docs/REVIEWING.md) in about 30 minutes and produce an
+informed approval decision. The policy JSON embedded in
+[`_scripts/customer-org-setup.sh`](_scripts/customer-org-setup.sh) and
+[`_scripts/single-account-setup.sh`](_scripts/single-account-setup.sh)
+is the canonical source for every permission granted.
 
 ### Versioning
 
@@ -551,57 +529,7 @@ minor for additive changes; patch for documentation and bug fixes.
 
 ---
 
-## Appendix A — OpenTofu module (optional)
-
-The CloudShell setup script in [`_scripts/`](_scripts/) is the
-recommended way to apply this bootstrap. The OpenTofu module in
-[`deploy/`](deploy/) is retained for two purposes:
-
-1. **Customers who run their own IaC** can drive bootstrap through
-   their existing Terraform/OpenTofu pipeline rather than CloudShell.
-2. **Security reviewers** can read `deploy/*.tf` as the canonical
-   declarative form of every resource the script creates (see
-   [`docs/REVIEWING.md`](docs/REVIEWING.md)).
-
-See [`examples/customer-applied/`](examples/customer-applied/) for the
-full wrapping example, and
-[`examples/axelspire-provisioned/`](examples/axelspire-provisioned/)
-for the managed-onboarding variant (AxelSpire creates the account
-first, then transfers it to the customer's Organization).
-
-### A.1 — write `acme.tfvars`
-
-```hcl
-customer_id                      = "acme-corp"
-region                           = "eu-west-1"
-axelspire_ci_account_id          = "033113129683"
-customer_admin_role_arns         = [
-  "arn:aws:iam::123456789012:role/PlatformAdmin",
-  "arn:aws:iam::123456789012:role/BreakGlass",
-]
-axelspire_artifact_kms_key_arn   = "arn:aws:kms:eu-west-1:033113129683:key/11111111-2222-3333-4444-555555555555"
-axelspire_artifact_s3_bucket_arn = "arn:aws:s3:::3am-ci-artifacts-033113129683"
-```
-
-### A.2 — apply
-
-```sh
-cd examples/customer-applied
-tofu init
-tofu apply -var-file=acme.tfvars
-```
-
-### A.3 — capture the hand-off bundle
-
-```sh
-tofu output -json handoff_values > handoff.json
-```
-
-Then go to [Hand-off to AxelSpire](#hand-off-to-axelspire).
-
----
-
-## Appendix B — Manual AWS CLI walkthrough (reference only)
+## Appendix A — Manual AWS CLI walkthrough (reference only)
 
 Step-by-step `aws` CLI v2 reproduction of the OpenTofu module. The
 setup script in [`_scripts/`](_scripts/) executes these exact API
@@ -710,9 +638,8 @@ export DEPLOYMENT_ROLE_ARN=$(aws iam get-role \
 > session tag, drop the `Condition` block from the
 > `AllowAxelspireCITagSession` statement entirely. Likewise, omit the
 > `sts:ExternalId` entry from the `AllowAxelspireCIAssumeRole`
-> condition if no external ID is in use. This mirrors the
-> `require_license_session_tag` and `external_id_secret_arn` variables
-> in `deploy/variables.tf`.
+> condition if no external ID is in use. Pass `--no-license-session-tag`
+> or omit `--external-id-secret-name` to the setup script for the same effect.
 
 ### B.3 — create the customer-managed CMK and alias
 
@@ -882,9 +809,8 @@ export STATE_BUCKET_ARN="arn:${PARTITION}:s3:::${STATE_BUCKET}"
 
 ### B.5 — attach the three inline permission policies
 
-These mirror, statement-for-statement, [`deploy/iam.tf`](deploy/iam.tf),
-[`deploy/iam-permissions-ec2.tf`](deploy/iam-permissions-ec2.tf), and
-[`deploy/iam-permissions-extra.tf`](deploy/iam-permissions-extra.tf).
+These mirror, statement-for-statement, the policy JSON embedded in
+[`_scripts/customer-org-setup.sh`](_scripts/customer-org-setup.sh).
 
 ```sh
 # ---- ThreeAM-Deployment-Permissions (trust-anchor resources) ----
