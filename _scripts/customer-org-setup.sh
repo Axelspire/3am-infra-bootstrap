@@ -11,7 +11,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.21"
+BOOTSTRAP_VERSION="0.2.22"
 BOOTSTRAP_VARIANT="multi-account"
 SCRIPT_LAST_UPDATED="2026-06-21"
 BOOTSTRAP_SCRIPT_NAME="customer-org-setup.sh"
