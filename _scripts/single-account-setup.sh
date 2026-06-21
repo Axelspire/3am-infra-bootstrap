@@ -20,7 +20,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.18"
+BOOTSTRAP_VERSION="0.2.19"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-06-20"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
@@ -867,7 +867,18 @@ EOF
     { "Effect": "Allow", "Action": ["apigateway:*"],
       "Resource": ["arn:${PARTITION}:apigateway:*::/*"] },
     { "Effect": "Allow", "Action": ["route53:*"], "Resource": ["*"] },
-    { "Effect": "Allow", "Action": ["acm:*"], "Resource": ["*"] }
+    { "Effect": "Allow", "Action": ["acm:*"], "Resource": ["*"] },
+    { "Sid": "CloudWatchCore", "Effect": "Allow",
+      "Action": ["cloudwatch:*"], "Resource": ["*"] },
+    { "Sid": "CloudTrailCore", "Effect": "Allow",
+      "Action": ["cloudtrail:*"], "Resource": ["*"] },
+    { "Sid": "LambdaEventSourceMappingsOn3amFunctions", "Effect": "Allow",
+      "Action": ["lambda:CreateEventSourceMapping","lambda:UpdateEventSourceMapping",
+                 "lambda:DeleteEventSourceMapping","lambda:GetEventSourceMapping",
+                 "lambda:ListEventSourceMappings"],
+      "Resource": ["*"],
+      "Condition": { "ArnLike": {
+        "lambda:FunctionArn": "arn:${PARTITION}:lambda:*:${ACCOUNT_ID}:function:3am-*" } } }
   ]
 }
 EOF

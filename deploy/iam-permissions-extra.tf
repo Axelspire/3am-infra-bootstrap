@@ -56,4 +56,44 @@ data "aws_iam_policy_document" "deployment_permissions_extra" {
     actions   = ["acm:*"]
     resources = ["*"]
   }
+
+  # CloudWatch alarms (PutMetricAlarm has no resource-tag condition
+  # path; 3am-core also creates a few legacy-named alarms tracked
+  # for a separate rename pass).
+  statement {
+    sid       = "CloudWatchCore"
+    effect    = "Allow"
+    actions   = ["cloudwatch:*"]
+    resources = ["*"]
+  }
+
+  # CloudTrail. Trail names today include non-3am-* (pki-${env}-trail);
+  # tracked for rename.
+  statement {
+    sid       = "CloudTrailCore"
+    effect    = "Allow"
+    actions   = ["cloudtrail:*"]
+    resources = ["*"]
+  }
+
+  # Lambda event source mappings. CreateEventSourceMapping evaluates
+  # against arn:...:event-source-mapping:* (UUID is unknown at create).
+  # Scope via lambda:FunctionArn to 3am-* functions.
+  statement {
+    sid    = "LambdaEventSourceMappingsOn3amFunctions"
+    effect = "Allow"
+    actions = [
+      "lambda:CreateEventSourceMapping",
+      "lambda:UpdateEventSourceMapping",
+      "lambda:DeleteEventSourceMapping",
+      "lambda:GetEventSourceMapping",
+      "lambda:ListEventSourceMappings",
+    ]
+    resources = ["*"]
+    condition {
+      test     = "ArnLike"
+      variable = "lambda:FunctionArn"
+      values   = ["arn:${local.partition}:lambda:*:${local.account_id}:function:3am-*"]
+    }
+  }
 }
