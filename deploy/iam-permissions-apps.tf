@@ -87,6 +87,13 @@ data "aws_iam_policy_document" "deployment_permissions_apps" {
   }
 
   statement {
+    sid       = "DynamoDBOn3amTables"
+    effect    = "Allow"
+    actions   = ["dynamodb:*"]
+    resources = ["arn:${local.partition}:dynamodb:*:${local.account_id}:table/3am-*"]
+  }
+
+  statement {
     sid    = "S3AccountPublicAccessBlock"
     effect = "Allow"
     actions = [
