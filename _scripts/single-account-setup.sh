@@ -20,7 +20,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.22"
+BOOTSTRAP_VERSION="0.2.23"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-06-21"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
@@ -63,6 +63,7 @@ CMK_POLICY_FILE="/tmp/3am-customer-cmk-policy.json"
 STATE_BUCKET_POLICY_FILE="/tmp/3am-state-bucket-policy.json"
 DRIFT_TRUST_POLICY_FILE="/tmp/3am-drift-reader-trust.json"
 DRIFT_STATE_POLICY_FILE="/tmp/3am-drift-reader-state.json"
+DRIFT_WORKLOAD_POLICY_FILE="/tmp/3am-drift-reader-workload.json"
 
 ALLOWED_REGIONS_CSV="eu-west-1,us-east-1"
 PLATFORM_ADMINS_GROUP="3AM-Platform-Admins"
@@ -1234,6 +1235,46 @@ EOF
 }
 EOF
   python3 -m json.tool "${DRIFT_STATE_POLICY_FILE}" >/dev/null
+
+  # Workload-read permissions for tofu refresh on resources whose APIs
+  # are not in the AWS-managed ReadOnlyAccess policy:
+  #   - secretsmanager:GetSecretValue : aws_secretsmanager_secret_version
+  #     (3am-core/deploy/modules/secrets, 3am-ca-kms/deploy/secrets.tf)
+  #     and data.aws_secretsmanager_secret_version (external_id).
+  #   - kms:Decrypt via aws/ssm : data.aws_ssm_parameter with
+  #     with_decryption=true on SecureString params encrypted by the
+  #     AWS-managed aws/ssm key (e.g. 3am-internal internal_access_key).
+  # kms:ViaService bounds the Decrypt grant to those two services so the
+  # role cannot decrypt arbitrary KMS keys directly.
+  log "writing ${DRIFT_WORKLOAD_POLICY_FILE}"
+  cat > "${DRIFT_WORKLOAD_POLICY_FILE}" <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SecretsManagerGetSecretValue",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "*"
+    },
+    {
+      "Sid": "KmsDecryptViaAwsManagedServiceKeys",
+      "Effect": "Allow",
+      "Action": "kms:Decrypt",
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "kms:ViaService": [
+            "ssm.*.amazonaws.com",
+            "secretsmanager.*.amazonaws.com"
+          ]
+        }
+      }
+    }
+  ]
+}
+EOF
+  python3 -m json.tool "${DRIFT_WORKLOAD_POLICY_FILE}" >/dev/null
 }
 
 phase5_get_or_create_drift_reader_role () {
@@ -1268,6 +1309,9 @@ phase5_put_drift_reader_policies () {
     --policy-document "file://${DRIFT_STATE_POLICY_FILE}" >/dev/null
   log "  ThreeAM-DriftReader-State CI CMK = ${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"
   log "  (must match 3am-deployments customers/<id>/customer.hcl bootstrap.artifact_kms_key_arn and CI key policy AllowCustomerDriftReaderDecrypt)"
+  aws iam put-role-policy --role-name "${DRIFT_READER_ROLE_NAME}" \
+    --policy-name ThreeAM-DriftReader-Workload-Read \
+    --policy-document "file://${DRIFT_WORKLOAD_POLICY_FILE}" >/dev/null
 }
 
 # CMK lookup-by-alias then create-if-missing. Re-applies the key policy
