@@ -11,9 +11,9 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.23"
+BOOTSTRAP_VERSION="0.2.24"
 BOOTSTRAP_VARIANT="multi-account"
-SCRIPT_LAST_UPDATED="2026-06-21"
+SCRIPT_LAST_UPDATED="2026-06-30"
 BOOTSTRAP_SCRIPT_NAME="customer-org-setup.sh"
 BOOTSTRAP_REPO="${BOOTSTRAP_REPO:-Axelspire/3am-infra-bootstrap}"
 BOOTSTRAP_GIT_REF="${BOOTSTRAP_GIT_REF:-main}"
@@ -74,6 +74,7 @@ AXELSPIRE_CI_ACCOUNT_ID="033113129683"
 AXELSPIRE_CI_REGION="eu-west-1"
 AXELSPIRE_CI_ROLE_NAME="GitHubActions-CustomerDeploy"
 AXELSPIRE_CI_DRIFT_ROLE_NAME="GitHubActions-DriftDetect"
+AXELSPIRE_OPERATOR_ROLE_NAME="Operator-Admin"   # CI-account role allowed to assume ThreeAM-Deployment for local debugging
 DEPLOYMENT_ROLE_NAME="ThreeAM-Deployment"
 DRIFT_READER_ROLE_NAME="ThreeAM-DriftReader"
 EXTERNAL_ID_SECRET_NAME="/3am/license/external-id"
@@ -893,6 +894,7 @@ phase5_write_policy_files () {
     fi
     jq -n \
       --arg principal "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_ROLE_NAME}" \
+      --arg op_principal "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_OPERATOR_ROLE_NAME}" \
       --argjson assume_conds "${assume_conds}" \
       --argjson tag_conds "${tag_conds}" \
       '{
@@ -910,7 +912,14 @@ phase5_write_policy_files () {
             Effect: "Allow",
             Principal: { AWS: $principal },
             Action: "sts:TagSession"
-          } + (if ($tag_conds | length) > 0 then {Condition: $tag_conds} else {} end))
+          } + (if ($tag_conds | length) > 0 then {Condition: $tag_conds} else {} end)),
+          {
+            Sid: "AllowAxelspireOperatorAssumeRole",
+            Effect: "Allow",
+            Principal: { AWS: $op_principal },
+            Action: "sts:AssumeRole",
+            Condition: $assume_conds
+          }
         ]
       }' > "${TRUST_POLICY_FILE}"
   else
@@ -939,6 +948,13 @@ phase5_write_policy_files () {
       "Effect": "Allow",
       "Principal": { "AWS": "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_CI_ROLE_NAME}" },
       "Action": "sts:TagSession"${tag_stmt_tail}
+    },
+    {
+      "Sid": "AllowAxelspireOperatorAssumeRole",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:${PARTITION}:iam::${AXELSPIRE_CI_ACCOUNT_ID}:role/${AXELSPIRE_OPERATOR_ROLE_NAME}" },
+      "Action": "sts:AssumeRole",
+      "Condition": ${assume_cond_json}
     }
   ]
 }
