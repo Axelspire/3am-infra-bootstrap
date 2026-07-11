@@ -20,9 +20,9 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.23"
+BOOTSTRAP_VERSION="0.2.25"
 BOOTSTRAP_VARIANT="single-account"
-SCRIPT_LAST_UPDATED="2026-06-21"
+SCRIPT_LAST_UPDATED="2026-06-30"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
 BOOTSTRAP_REPO="${BOOTSTRAP_REPO:-Axelspire/3am-infra-bootstrap}"
 BOOTSTRAP_GIT_REF="${BOOTSTRAP_GIT_REF:-main}"
@@ -43,6 +43,24 @@ elif command -v curl >/dev/null 2>&1; then
   rm -f "${_bootstrap_self_update_inc}"
 fi
 unset _bootstrap_self_update_dir _bootstrap_self_update_inc
+
+# Shared DNS instruction/formula helpers (kept byte-identical with
+# customer-org-setup.sh via test_dns_instructions_parity.sh).
+_bootstrap_dns_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${_bootstrap_dns_dir}/bootstrap-dns-instructions.inc.sh" ]]; then
+  # shellcheck source=bootstrap-dns-instructions.inc.sh
+  source "${_bootstrap_dns_dir}/bootstrap-dns-instructions.inc.sh"
+elif command -v curl >/dev/null 2>&1; then
+  _bootstrap_dns_inc="$(mktemp)"
+  if curl -fsSL --connect-timeout 10 --max-time 45 \
+    "https://raw.githubusercontent.com/${BOOTSTRAP_REPO}/${BOOTSTRAP_GIT_REF}/_scripts/bootstrap-dns-instructions.inc.sh" \
+    -o "${_bootstrap_dns_inc}" 2>/dev/null; then
+    # shellcheck source=/dev/null
+    source "${_bootstrap_dns_inc}"
+  fi
+  rm -f "${_bootstrap_dns_inc}"
+fi
+unset _bootstrap_dns_dir _bootstrap_dns_inc
 
 # ---------------------------------------------------------------------------
 # Defaults & globals
@@ -1844,11 +1862,17 @@ Hand off to AxelSpire:
   to AxelSpire. It contains every ARN/ID needed to onboard this account
   in the AxelSpire customer-onboard workflow.
 EOF
+  if command -v print_dns_instructions_human >/dev/null 2>&1; then
+    print_dns_instructions_human
+  fi
 }
 
 print_outputs_json () {
+  local dns_json
+  dns_json="$(command -v dns_instructions_json >/dev/null 2>&1 && dns_instructions_json || echo '{}')"
   if command -v jq >/dev/null 2>&1; then
     jq -n \
+      --argjson dns                    "${dns_json}" \
       --arg customer_name              "${CUSTOMER_NAME}" \
       --arg customer_id                "${CUSTOMER_ID}" \
       --arg account_id                 "${ACCOUNT_ID}" \
@@ -1894,6 +1918,7 @@ print_outputs_json () {
         deployment_region: $deployment_region,
         idc_region: $idc_region,
         partition: $partition,
+        dns: $dns,
         phase0: {
           identity_center_instance_arn: $instance_arn,
           identity_store_id: $identity_store_id,
@@ -1955,6 +1980,13 @@ print_outputs_json () {
     printf '  "external_id_secret_arn": "%s",\n'              "${EXTERNAL_ID_SECRET_ARN}"
     printf '  "state_bucket_name": "%s",\n'                   "${STATE_BUCKET_NAME}"
     printf '  "state_lock_table_name": "%s",\n'               "${STATE_LOCK_TABLE_NAME}"
+    printf '  "dns_env": "%s",\n'                             "${DNS_ENV:-prod}"
+    printf '  "dns_platform_primary_fqdn": "%s",\n'           "axel.${CUSTOMER_ID}.3am.global"
+    printf '  "dns_platform_ocsp_fqdn": "%s",\n'              "ocsp.${CUSTOMER_ID}.3am.global"
+    printf '  "dns_platform_comms_fqdn": "%s",\n'             "comms.${CUSTOMER_ID}.3am.global"
+    printf '  "dns_infra_api_fqdn": "%s",\n'                  "api.${DEPLOYMENT_REGION}.${CUSTOMER_ID}.${DNS_ENV:-prod}.3amops.com"
+    printf '  "dns_infra_ocsp_fqdn": "%s",\n'                 "ocsp.${DEPLOYMENT_REGION}.${CUSTOMER_ID}.${DNS_ENV:-prod}.3amops.com"
+    printf '  "dns_infra_comms_fqdn": "%s",\n'                "comms.${DEPLOYMENT_REGION}.${CUSTOMER_ID}.${DNS_ENV:-prod}.3amops.com"
     printf '  "axelspire_artifact_kms_key_arn": "%s",\n'      "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"
     printf '  "axelspire_artifact_s3_bucket_arn": "%s"\n'     "${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}"
     printf '}\n'
