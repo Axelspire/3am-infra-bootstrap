@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Axelspire Inc. All rights reserved.
+# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+
 # Local .terraform / .tofu directories
 **/.terraform/*
 **/.tofu/*

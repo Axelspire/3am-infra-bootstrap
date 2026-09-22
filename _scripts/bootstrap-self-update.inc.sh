@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Axelspire Inc. All rights reserved.
+# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+
 # bootstrap-self-update.inc.sh — shared curl-and-run self-update for bootstrap scripts.
 # Sourced by customer-org-setup.sh and single-account-setup.sh.
 #

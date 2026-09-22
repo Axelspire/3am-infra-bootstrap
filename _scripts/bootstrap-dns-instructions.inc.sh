@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Axelspire Inc. All rights reserved.
+# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+
 # bootstrap-dns-instructions.inc.sh — shared DNS instruction/formula helpers.
 # Sourced by customer-org-setup.sh and single-account-setup.sh so the
 # customer-facing DNS hand-off is emitted identically from both variants.

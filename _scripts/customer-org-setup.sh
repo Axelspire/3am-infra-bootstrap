@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Axelspire Inc. All rights reserved.
+# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+
 # customer-org-setup.sh — one-time-per-customer-Organization setup for 3AM.
 #
 # Designed to run in AWS CloudShell from the customer's Org-management

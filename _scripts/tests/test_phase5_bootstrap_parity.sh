@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Axelspire Inc. All rights reserved.
+# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+
 # Fail when Phase 5 bootstrap helpers drift between single-account-setup.sh
 # and customer-org-setup.sh. IAM policy JSON heredocs and shared helpers
 # must stay in sync (ManagedBy script names are normalized).
