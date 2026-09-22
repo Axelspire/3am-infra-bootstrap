@@ -985,6 +985,7 @@ EOF
     { "Effect": "Allow", "Action": ["rds:*"],
       "Resource": ["arn:${PARTITION}:rds:*:${ACCOUNT_ID}:*"] },
     { "Effect": "Allow", "Action": ["secretsmanager:*"], "Resource": ["*"] },
+    { "Effect": "Allow", "Action": ["cognito-idp:*"], "Resource": ["*"] },
     { "Effect": "Allow", "Action": ["ses:*"], "Resource": ["*"] },
     { "Effect": "Allow", "Action": ["sqs:*"],
       "Resource": ["arn:${PARTITION}:sqs:*:${ACCOUNT_ID}:*"] },
