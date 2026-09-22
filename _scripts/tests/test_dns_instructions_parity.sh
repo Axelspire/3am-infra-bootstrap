@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Axelspire Inc. All rights reserved.
+# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+
 # Fail when the shared DNS instruction helper drifts, or when one bootstrap
 # script wires it in but the other does not. The DNS logic MUST live only in
 # bootstrap-dns-instructions.inc.sh (sourced by both), never copy-pasted.

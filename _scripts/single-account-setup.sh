@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Axelspire Inc. All rights reserved.
+# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+
 # single-account-setup.sh — 3AM full bootstrap inside an existing single
 # AWS account: Identity Center / SCPs (Phase 0) plus the cross-account
 # IAM role, customer CMK, Terraform state backend and SSM parameters

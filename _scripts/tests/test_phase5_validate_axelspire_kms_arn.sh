@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Axelspire Inc. All rights reserved.
+# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+
 # Unit tests for phase5_validate_axelspire_kms_arn in customer-org-setup.sh.
 #
 # The validation gates --axelspire-artifact-kms-key-arn on `apply`: the
