@@ -179,6 +179,9 @@ Set up 3AM Identity Center, SCPs and the Phase 5 bootstrap resources
 secret, SSM parameters) inside the AWS account you are currently
 signed into. Emits a single handoff.json blob for AxelSpire.
 
+**Where to run:** the customer **workload** account (org root = workload
+in the single-account pattern). Not AxelSpire CI 033113129683.
+
 Commands:
   apply        Run / resume the full setup (default).
   preflight    Run only the preflight checks (no AWS writes).
