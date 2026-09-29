@@ -179,6 +179,9 @@ into the child account to run Phase 5 (ThreeAM-Deployment role, customer
 CMK, state backend, external-ID secret, SSM parameters). Emits a single
 handoff JSON blob for AxelSpire.
 
+**Where to run:** customer's Org **management** account CloudShell/SSO
+(not AxelSpire CI 033113129683; not the workload child as the only session).
+
 Commands:
   apply        Run / resume the full setup (default).
   preflight    Run only the preflight checks (no AWS writes).

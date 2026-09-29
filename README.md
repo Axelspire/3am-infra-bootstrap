@@ -24,17 +24,25 @@ resource this bootstrap creates and are the canonical reference for the
 
 ## Run the setup (CloudShell)
 
+### Where to run (required)
+
+| Script | AWS account for CloudShell / SSO | Not here |
+|---|---|---|
+| **`customer-org-setup.sh`** | Customer's **Org management** account (Organizations / IDC home). The script then assumes `OrganizationAccountAccessRole` into the 3AM child for Phase 5. | AxelSpire CI `033113129683`, or the workload child alone |
+| **`single-account-setup.sh`** | The **same** customer account that is the 3AM workload (org root = workload). | AxelSpire CI `033113129683` |
+
+`outputs` / `outputs-json` use the same account rule. Running org-setup in the CI account returns empty JSON (no Phase 5 there).
+
 Two variants of the same script, depending on account topology. Both
-run in AWS CloudShell against the customer's Org-management account,
-both are idempotent (`list → create-if-missing` for every resource),
+are idempotent (`list → create-if-missing` for every resource),
 both embed their policy bodies as heredocs (single-file `curl` deploy),
 and both expose the same `apply` / `preflight` / `outputs` /
 `outputs-json` sub-commands.
 
 | Variant | Script | When to use |
 |---|---|---|
-| **Multi-account** | [`_scripts/customer-org-setup.sh`](_scripts/customer-org-setup.sh) | Default. Creates a dedicated 3AM workload AWS account inside a `3AM` OU under the Org root. Attaches SCPs to the OU. Recommended pattern — keeps the 3AM workload separate from the Org-management account. |
-| **Single-account** | [`_scripts/single-account-setup.sh`](_scripts/single-account-setup.sh) | The 3AM workload runs in the same AWS account as the Org root (small customers, POCs, freshly-signed-up AWS account used as-is). Skips account / OU creation; assignments target the current caller account. Attaches SCPs to root (no-op for the management account but inherited by any future child accounts). Opt out with `--skip-scps`. |
+| **Multi-account** | [`_scripts/customer-org-setup.sh`](_scripts/customer-org-setup.sh) | Default. Creates a dedicated 3AM workload AWS account inside a `3AM` OU under the Org root. Attaches SCPs to the OU. Recommended pattern — keeps the 3AM workload separate from the Org-management account. **Run from Org management.** |
+| **Single-account** | [`_scripts/single-account-setup.sh`](_scripts/single-account-setup.sh) | The 3AM workload runs in the same AWS account as the Org root (small customers, POCs, freshly-signed-up AWS account used as-is). Skips account / OU creation; assignments target the current caller account. Attaches SCPs to root (no-op for the management account but inherited by any future child accounts). Opt out with `--skip-scps`. **Run in that account.** |
 
 Both create the same downstream Identity Center surface:
 
@@ -251,6 +259,20 @@ idempotent.
 ---
 
 ## Troubleshooting
+
+**`outputs-json` is empty / `phase5.*` missing**
+
+You are almost certainly in the **wrong AWS account**.
+`customer-org-setup.sh` must run in the customer's **Org management**
+account (not AxelSpire CI `033113129683`, and not the 3AM workload child
+alone). Check with:
+
+```sh
+aws sts get-caller-identity --query Account --output text
+```
+
+See **Where to run** under [Run the setup (CloudShell)](#run-the-setup-cloudshell)
+and `docs/BOOTSTRAP-OPS.md` §3.1.
 
 **`IAM Identity Center is not enabled in this region. Enable it in the console (one-time, Org-mgmt account) and re-run.`**
 

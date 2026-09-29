@@ -46,9 +46,11 @@ from single-account to multi-account.
 
 ### 3.1 Operator authentication
 
-- AWS SSO session for the **customer's** Org-management account (or the
-  account itself for single-account variant). The session must hold an
-  `AdministratorAccess`-equivalent permission set in that account.
+| Script | Session account | Do **not** use |
+|---|---|---|
+| `customer-org-setup.sh` | Customer's **Org management** account (admin / `AdministratorAccess`-equivalent) | AxelSpire CI `033113129683`; the 3AM workload child as the only session (Phase 0 needs mgmt) |
+| `single-account-setup.sh` | The customer **workload** account (same as org root in the single-account pattern) | AxelSpire CI `033113129683` |
+
 - For AxelSpire-runs / pair-runs the customer typically delegates this
   via Identity Center or a temporary IAM user. Either is fine; the
   script does not care how the caller authenticated, only that the
@@ -57,6 +59,14 @@ from single-account to multi-account.
 - For local-laptop runs against macOS see
   `3am-deployments/docs/AWS-AUTH-MACOS.md` for the SSO-login recipe
   (`Token has expired` is the most common symptom of a stale session).
+- Sanity check before apply / outputs:
+
+```bash
+aws sts get-caller-identity --query Account --output text
+# org-setup → customer's Org management account ID
+# single-account → customer's workload account ID
+# never → 033113129683 (AxelSpire CI)
+```
 
 ### 3.2 Tools
 
@@ -65,8 +75,8 @@ from single-account to multi-account.
 - `bash` 4+ (`bash 5+` on macOS via Homebrew; default `/bin/bash` is
   3.2 and will not work)
 
-The script itself runs ideally in **AWS CloudShell** from the customer's
-Org-management account — that side-steps every tooling and credential
+The script itself runs ideally in **AWS CloudShell** in the account from
+the §3.1 table — that side-steps every tooling and credential
 concern in one go. Both setup scripts **self-update from GitHub `main`
 before parsing flags** (unless `--skip-self-update`); a stale CloudShell
 copy that pre-dates flags such as `--deployment-region` should upgrade
