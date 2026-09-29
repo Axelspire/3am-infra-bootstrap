@@ -59,6 +59,7 @@ for var in policy_vars:
 
 funcs = [
     "phase5_validate_axelspire_kms_arn",
+    "phase5_axelspire_kms_iam_resource_arn",
     "phase5_compute_axelspire_arns",
     "phase5_assert_inline_policy_sizes",
     "phase5_write_policy_files",

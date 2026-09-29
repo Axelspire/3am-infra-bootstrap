@@ -88,7 +88,12 @@ The script decouples these:
   defaults to `AWS_REGION` (single-region orgs need not pass it). It
   must appear in `--allowed-regions`. The KMS ARN passed via
   `--axelspire-artifact-kms-key-arn` must be the same-region MRK leaf;
-  preflight enforces the region match.
+  preflight enforces the region match. On apply, Phase 5 writes that
+  exact ARN into `/3am/axelspire/artifact-kms-key-arn` and state SSE
+  config, but for **MRK** keys the `ThreeAM-Deployment` /
+  `ThreeAM-DriftReader` identity policies use
+  `arn:<partition>:kms:*:<ci-acct>:key/mrk-…` so an add-region re-run
+  does not drop prior regions (BOOTSTRAP-1 / 0.2.26+).
 
 `customer-org-setup.sh` additionally pivots `AWS_REGION` to the
 deployment region after assuming into the child account, so all

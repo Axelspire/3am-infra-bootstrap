@@ -23,9 +23,9 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.25"
+BOOTSTRAP_VERSION="0.2.26"
 BOOTSTRAP_VARIANT="single-account"
-SCRIPT_LAST_UPDATED="2026-06-30"
+SCRIPT_LAST_UPDATED="2026-09-29"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
 BOOTSTRAP_REPO="${BOOTSTRAP_REPO:-Axelspire/3am-infra-bootstrap}"
 BOOTSTRAP_GIT_REF="${BOOTSTRAP_GIT_REF:-main}"
@@ -239,7 +239,7 @@ Phase 5 tuning (defaults are correct for the standard AxelSpire setup):
                                 Key-ID ARN of the customer-region MRK
                                 replica of the per-customer AxelSpire CI
                                 CMK. Required. Must be of the form
-                                arn:<partition>:kms:<region>:<ci-acct>:key/<uuid>
+                                arn:<partition>:kms:<region>:<ci-acct>:key/<id>
                                 (alias ARNs are rejected: IAM Resource
                                 matching does not authorize via aliases),
                                 and the region must equal the customer's
@@ -247,7 +247,11 @@ Phase 5 tuning (defaults are correct for the standard AxelSpire setup):
                                 requires a same-region key). Obtain by
                                 running `terragrunt output kms_key_arn`
                                 on the customer-ci-key-replica leaf for
-                                this customer/region pair.
+                                this customer/region pair. For MRK keys,
+                                Phase 5 IAM (ThreeAM-Deployment /
+                                DriftReader) uses region=* so add-region
+                                re-runs keep every replica authorized;
+                                SSE/SSM still store this exact regional ARN.
   --axelspire-artifact-s3-bucket-arn ARN
                                 Override the deterministic
                                 arn:aws:s3:::3am-ci-artifacts-<ci-acct>
@@ -721,10 +725,30 @@ phase5_validate_axelspire_kms_arn () {
     || die "--axelspire-artifact-kms-key-arn region '${key_region}' must equal the customer deployment region '${DEPLOYMENT_REGION}' (DynamoDB SSE-KMS requires a same-region key). Pass the customer-region MRK replica's key-ID ARN, or set --deployment-region to match the ARN."
 }
 
+# Identity-policy Resource for the AxelSpire CI CMK. MRK replicas share
+# the same mrk-* key id in every region; using region=* keeps Ireland
+# authorized when Phase 5 is re-run for Frankfurt (add-region). Exact
+# regional ARN remains in AXELSPIRE_ARTIFACT_KMS_KEY_ARN for SSE/SSM.
+phase5_axelspire_kms_iam_resource_arn () {
+  local arn="${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"
+  local key_id="${arn##*/}"
+  local account
+  account=$(echo "${arn}" | awk -F: '{print $5}')
+  if [[ "${key_id}" == mrk-* ]]; then
+    printf 'arn:%s:kms:*:%s:key/%s' "${PARTITION}" "${account}" "${key_id}"
+  else
+    printf '%s' "${arn}"
+  fi
+}
+
 phase5_compute_axelspire_arns () {
   phase5_validate_axelspire_kms_arn
   if [ -z "${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}" ]; then
     AXELSPIRE_ARTIFACT_S3_BUCKET_ARN="arn:${PARTITION}:s3:::3am-ci-artifacts-${AXELSPIRE_CI_ACCOUNT_ID}"
+  fi
+  AXELSPIRE_ARTIFACT_KMS_IAM_RESOURCE_ARN=""
+  if [ -n "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" ]; then
+    AXELSPIRE_ARTIFACT_KMS_IAM_RESOURCE_ARN="$(phase5_axelspire_kms_iam_resource_arn)"
   fi
 }
 
@@ -838,7 +862,7 @@ EOF
     { "Sid": "KmsDataPlaneOnAxelspireArtifactCmk", "Effect": "Allow",
       "Action": ["kms:Encrypt","kms:Decrypt","kms:ReEncryptFrom","kms:ReEncryptTo",
                  "kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext","kms:DescribeKey"],
-      "Resource": ["${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"] },
+      "Resource": ["${AXELSPIRE_ARTIFACT_KMS_IAM_RESOURCE_ARN}"] },
     { "Sid": "S3OnStateBucket", "Effect": "Allow",
       "Action": ["s3:GetObject","s3:GetObjectVersion","s3:PutObject","s3:DeleteObject",
                  "s3:ListBucket","s3:ListBucketVersions","s3:GetBucketVersioning",
@@ -1251,7 +1275,7 @@ EOF
       "Sid": "KmsDecryptOnAxelspireCiCmk",
       "Effect": "Allow",
       "Action": ["kms:Decrypt", "kms:DescribeKey"],
-      "Resource": "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}"
+      "Resource": "${AXELSPIRE_ARTIFACT_KMS_IAM_RESOURCE_ARN}"
     }
   ]
 }
