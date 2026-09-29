@@ -67,7 +67,11 @@ from single-account to multi-account.
 
 The script itself runs ideally in **AWS CloudShell** from the customer's
 Org-management account — that side-steps every tooling and credential
-concern in one go.
+concern in one go. Both setup scripts **self-update from GitHub `main`
+before parsing flags** (unless `--skip-self-update`); a stale CloudShell
+copy that pre-dates flags such as `--deployment-region` should upgrade
+and re-exec instead of dying on `unknown argument`. If self-update cannot
+load, the script refuses to parse flags and tells you to re-clone.
 
 ### 3.3 SSO home region vs. deployment region
 
