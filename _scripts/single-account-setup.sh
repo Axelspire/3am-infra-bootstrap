@@ -23,7 +23,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.26"
+BOOTSTRAP_VERSION="0.2.27"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-09-29"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
@@ -2042,9 +2042,18 @@ do_outputs_json () {
 main () {
   if [ $# -eq 0 ]; then usage; exit 0; fi
   INVOCATION_ARGV=( "$@" )
+  # Self-update MUST run before parse_args so a stale CloudShell copy can
+  # grow new flags (e.g. --deployment-region) instead of dying on unknown arg.
+  local _skip_su=false
+  case "${SKIP_SELF_UPDATE:-false}" in 1|true|yes|TRUE|YES) _skip_su=true ;; esac
+  [[ "${BOOTSTRAP_SELF_UPDATE_REEXEC:-}" == "1" ]] && _skip_su=true
+  local _a
+  for _a in "$@"; do [[ "${_a}" == "--skip-self-update" ]] && _skip_su=true; done
   if declare -F bootstrap_maybe_self_update >/dev/null 2>&1; then
     BOOTSTRAP_SCRIPT_PATH="${BASH_SOURCE[0]}"
     bootstrap_maybe_self_update "$@"
+  elif ! ${_skip_su}; then
+    die "bootstrap-self-update.inc.sh did not load (local ${BOOTSTRAP_VERSION}). Refusing to parse flags on a possibly stale copy — re-clone https://github.com/Axelspire/3am-infra-bootstrap or ensure curl can reach raw.githubusercontent.com, then re-run."
   fi
   parse_args "$@"
   case "${COMMAND}" in
