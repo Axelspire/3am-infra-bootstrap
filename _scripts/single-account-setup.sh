@@ -327,7 +327,7 @@ parse_args () {
       --quiet)                     QUIET=true; shift ;;
       --skip-self-update)          SKIP_SELF_UPDATE=true; shift ;;
       -h|--help)                   usage; exit 0 ;;
-      *) die "unknown argument: $1 (try --help)" ;;
+      *) die "unknown argument: $1 (try --help). Local script ${BOOTSTRAP_VERSION} (${BOOTSTRAP_VARIANT}). Current scripts self-update from GitHub before parsing flags — if this flag is documented on main, re-clone Axelspire/3am-infra-bootstrap (or fix curl to raw.githubusercontent.com) instead of using a stale CloudShell copy." ;;
     esac
   done
 }
