@@ -14,7 +14,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.26"
+BOOTSTRAP_VERSION="0.2.27"
 BOOTSTRAP_VARIANT="multi-account"
 SCRIPT_LAST_UPDATED="2026-09-29"
 BOOTSTRAP_SCRIPT_NAME="customer-org-setup.sh"
@@ -179,6 +179,9 @@ into the child account to run Phase 5 (ThreeAM-Deployment role, customer
 CMK, state backend, external-ID secret, SSM parameters). Emits a single
 handoff JSON blob for AxelSpire.
 
+**Where to run:** customer's Org **management** account CloudShell/SSO
+(not AxelSpire CI 033113129683; not the workload child as the only session).
+
 Commands:
   apply        Run / resume the full setup (default).
   preflight    Run only the preflight checks (no AWS writes).
@@ -321,7 +324,7 @@ parse_args () {
       --quiet)                     QUIET=true; shift ;;
       --skip-self-update)          SKIP_SELF_UPDATE=true; shift ;;
       -h|--help)                   usage; exit 0 ;;
-      *) die "unknown argument: $1 (try --help)" ;;
+      *) die "unknown argument: $1 (try --help). Local script ${BOOTSTRAP_VERSION} (${BOOTSTRAP_VARIANT}). Current scripts self-update from GitHub before parsing flags — if this flag is documented on main, re-clone Axelspire/3am-infra-bootstrap (or fix curl to raw.githubusercontent.com) instead of using a stale CloudShell copy." ;;
     esac
   done
 }
@@ -2209,9 +2212,18 @@ do_outputs_json () {
 main () {
   if [[ $# -eq 0 ]]; then usage; exit 0; fi
   INVOCATION_ARGV=( "$@" )
+  # Self-update MUST run before parse_args so a stale CloudShell copy can
+  # grow new flags (e.g. --deployment-region) instead of dying on unknown arg.
+  local _skip_su=false
+  case "${SKIP_SELF_UPDATE:-false}" in 1|true|yes|TRUE|YES) _skip_su=true ;; esac
+  [[ "${BOOTSTRAP_SELF_UPDATE_REEXEC:-}" == "1" ]] && _skip_su=true
+  local _a
+  for _a in "$@"; do [[ "${_a}" == "--skip-self-update" ]] && _skip_su=true; done
   if declare -F bootstrap_maybe_self_update >/dev/null 2>&1; then
     BOOTSTRAP_SCRIPT_PATH="${BASH_SOURCE[0]}"
     bootstrap_maybe_self_update "$@"
+  elif ! ${_skip_su}; then
+    die "bootstrap-self-update.inc.sh did not load (local ${BOOTSTRAP_VERSION}). Refusing to parse flags on a possibly stale copy — re-clone https://github.com/Axelspire/3am-infra-bootstrap or ensure curl can reach raw.githubusercontent.com, then re-run."
   fi
   parse_args "$@"
   case "${COMMAND}" in
