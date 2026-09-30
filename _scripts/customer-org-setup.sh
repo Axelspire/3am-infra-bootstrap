@@ -1057,6 +1057,8 @@ EOF
       "Resource": ["arn:${PARTITION}:apigateway:*::/*"] },
     { "Effect": "Allow", "Action": ["route53:*"], "Resource": ["*"] },
     { "Effect": "Allow", "Action": ["acm:*"], "Resource": ["*"] },
+    { "Sid": "CloudFrontStatusEdge", "Effect": "Allow",
+      "Action": ["cloudfront:*"], "Resource": ["*"] },
     { "Sid": "CloudWatchCore", "Effect": "Allow",
       "Action": ["cloudwatch:*"], "Resource": ["*"] },
     { "Sid": "CloudTrailCore", "Effect": "Allow",
