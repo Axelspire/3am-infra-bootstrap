@@ -1062,6 +1062,8 @@ EOF
     { "Effect": "Allow", "Action": ["acm:*"], "Resource": ["*"] },
     { "Sid": "CloudFrontStatusEdge", "Effect": "Allow",
       "Action": ["cloudfront:*"], "Resource": ["*"] },
+    { "Sid": "Wafv2RegionalAndCloudFront", "Effect": "Allow",
+      "Action": ["wafv2:*"], "Resource": ["*"] },
     { "Sid": "CloudWatchCore", "Effect": "Allow",
       "Action": ["cloudwatch:*"], "Resource": ["*"] },
     { "Sid": "CloudTrailCore", "Effect": "Allow",
@@ -1162,7 +1164,10 @@ EOF
     { "Effect": "Allow", "Action": ["sqs:*"],
       "Resource": ["arn:${PARTITION}:sqs:*:${ACCOUNT_ID}:*"] },
     { "Sid": "DynamoDBOn3amTables", "Effect": "Allow", "Action": ["dynamodb:*"],
-      "Resource": ["arn:${PARTITION}:dynamodb:*:${ACCOUNT_ID}:table/3am-*"] },
+      "Resource": [
+        "arn:${PARTITION}:dynamodb:*:${ACCOUNT_ID}:table/3am-*",
+        "arn:${PARTITION}:dynamodb:*:${ACCOUNT_ID}:table/3am-*/index/*"
+      ] },
     { "Effect": "Allow",
       "Action": ["s3:GetAccountPublicAccessBlock","s3:PutAccountPublicAccessBlock"],
       "Resource": ["*"] },
