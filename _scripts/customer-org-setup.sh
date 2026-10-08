@@ -818,9 +818,9 @@ tag_child_account_with_customer_metadata () {
     || { warn "tag_child_account: ACCOUNT_ID not set; skipping"; return 0; }
   [ -n "${CUSTOMER_ID}" ] \
     || { warn "tag_child_account: CUSTOMER_ID not set; skipping"; return 0; }
-  log "tagging account ${ACCOUNT_ID} with CustomerId=${CUSTOMER_ID} DeploymentRegion=${DEPLOYMENT_REGION}"
+  log "tagging account ${ACCOUNT_ID} with CustomerID=${CUSTOMER_ID} DeploymentRegion=${DEPLOYMENT_REGION}"
   aws organizations tag-resource --resource-id "${ACCOUNT_ID}" --tags \
-    "Key=CustomerId,Value=${CUSTOMER_ID}" \
+    "Key=CustomerID,Value=${CUSTOMER_ID}" \
     "Key=CustomerName,Value=${CUSTOMER_NAME}" \
     "Key=DeploymentRegion,Value=${DEPLOYMENT_REGION}" \
     "Key=ManagedBy,Value=customer-org-setup.sh" \
@@ -1311,7 +1311,7 @@ EOF
 # credential context).
 # ---------------------------------------------------------------------------
 phase5_common_tags_cli () {
-  echo "Key=Service,Value=3am Key=CustomerId,Value=${CUSTOMER_ID} Key=ManagedBy,Value=customer-org-setup.sh Key=BootstrapVersion,Value=${BOOTSTRAP_VERSION}"
+  echo "Key=Service,Value=3am Key=CustomerID,Value=${CUSTOMER_ID} Key=ManagedBy,Value=customer-org-setup.sh Key=BootstrapVersion,Value=${BOOTSTRAP_VERSION}"
 }
 
 phase5_get_or_create_deployment_role () {
@@ -1591,7 +1591,7 @@ phase5_get_or_create_state_bucket () {
   aws s3api put-bucket-policy --bucket "${STATE_BUCKET_NAME}" \
     --policy "file://${STATE_BUCKET_POLICY_FILE}" >/dev/null
   aws s3api put-bucket-tagging --bucket "${STATE_BUCKET_NAME}" \
-    --tagging "TagSet=[{Key=Service,Value=3am},{Key=CustomerId,Value=${CUSTOMER_ID}},{Key=ManagedBy,Value=customer-org-setup.sh},{Key=BootstrapVersion,Value=${BOOTSTRAP_VERSION}}]" >/dev/null
+    --tagging "TagSet=[{Key=Service,Value=3am},{Key=CustomerID,Value=${CUSTOMER_ID}},{Key=ManagedBy,Value=customer-org-setup.sh},{Key=BootstrapVersion,Value=${BOOTSTRAP_VERSION}}]" >/dev/null
 }
 
 phase5_get_or_create_lock_table () {
@@ -1611,7 +1611,7 @@ phase5_get_or_create_lock_table () {
       --attribute-definitions AttributeName=LockID,AttributeType=S \
       --key-schema AttributeName=LockID,KeyType=HASH \
       --sse-specification "Enabled=true,SSEType=KMS,KMSMasterKeyId=${CUSTOMER_CMK_ARN}" \
-      --tags "Key=Service,Value=3am" "Key=CustomerId,Value=${CUSTOMER_ID}" \
+      --tags "Key=Service,Value=3am" "Key=CustomerID,Value=${CUSTOMER_ID}" \
              "Key=ManagedBy,Value=customer-org-setup.sh" \
              "Key=BootstrapVersion,Value=${BOOTSTRAP_VERSION}" >/dev/null
     log "waiting for lock table ACTIVE"
@@ -1702,7 +1702,7 @@ EOF
               ${mr_flag} \
               --policy "file://${minimal_policy}" \
               --tags "TagKey=Service,TagValue=3am" \
-                     "TagKey=CustomerId,TagValue=${CUSTOMER_ID}" \
+                     "TagKey=CustomerID,TagValue=${CUSTOMER_ID}" \
                      "TagKey=ManagedBy,TagValue=customer-org-setup.sh" \
                      "TagKey=BootstrapVersion,TagValue=${BOOTSTRAP_VERSION}" \
               --query 'KeyMetadata.KeyId' --output text)
@@ -1884,9 +1884,15 @@ resolve_outputs () {
   # without any --customer-* or --deployment-region flags.
   if [ -n "${ACCOUNT_ID}" ] && [ "${ACCOUNT_ID}" != "None" ]; then
     if [ -z "${CUSTOMER_ID}" ]; then
+      # Prefer CustomerID; fall back to legacy CustomerId until accounts are retagged.
       CUSTOMER_ID=$(aws organizations list-tags-for-resource --resource-id "${ACCOUNT_ID}" \
-                      --query "Tags[?Key=='CustomerId'].Value | [0]" --output text 2>/dev/null || echo "")
+                      --query "Tags[?Key=='CustomerID'].Value | [0]" --output text 2>/dev/null || echo "")
       [ "${CUSTOMER_ID}" = "None" ] && CUSTOMER_ID=""
+      if [ -z "${CUSTOMER_ID}" ]; then
+        CUSTOMER_ID=$(aws organizations list-tags-for-resource --resource-id "${ACCOUNT_ID}" \
+                        --query "Tags[?Key=='CustomerId'].Value | [0]" --output text 2>/dev/null || echo "")
+        [ "${CUSTOMER_ID}" = "None" ] && CUSTOMER_ID=""
+      fi
     fi
     if [ -z "${CUSTOMER_NAME}" ]; then
       CUSTOMER_NAME=$(aws organizations list-tags-for-resource --resource-id "${ACCOUNT_ID}" \

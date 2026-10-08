@@ -201,7 +201,7 @@ The apply is idempotent and resumable: every step is "list → create if
 missing → reuse". A partial failure can be cleared by fixing the cause
 and re-running the same command. See `--help` for every flag.
 
-The script tags the newly-created child account with `CustomerId` and
+The script tags the newly-created child account with `CustomerID` and
 `CustomerName` Organizations tags. These exist purely so a later
 `outputs-json` invocation from a fresh shell can re-derive the slug
 without the operator passing `--customer-id` again (see §7).
@@ -287,7 +287,7 @@ AWS_REGION=us-east-1 ./customer-org-setup.sh outputs-json \
 ```
 
 This works with **no flags** if the original `apply` ran the
-account-tagging step — the script reads `CustomerId` / `CustomerName`
+account-tagging step — the script reads `CustomerID` (legacy `CustomerId` fallback) / `CustomerName`
 back from Organizations tags on the child account, then re-resolves
 every Phase 5 value by assuming
 `OrganizationAccountAccessRole`. If the tags are missing (older
