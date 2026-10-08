@@ -588,7 +588,7 @@ export COMMON_TAGS_JSON=$(jq -cn \
   --arg customer "$CUSTOMER_ID" \
   '[
     {Key:"Service",          Value:"3am"},
-    {Key:"CustomerId",       Value:$customer},
+    {Key:"CustomerID",       Value:$customer},
     {Key:"ManagedBy",        Value:"3am-infra-bootstrap"},
     {Key:"BootstrapVersion", Value:"0.1.0"}
   ]')

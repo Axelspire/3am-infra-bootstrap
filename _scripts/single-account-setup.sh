@@ -1172,7 +1172,7 @@ EOF
 phase5_common_tags_cli () {
   # Returns AWS-CLI --tags-style argument list. Used by services whose
   # Create* call accepts tags inline.
-  echo "Key=Service,Value=3am Key=CustomerId,Value=${CUSTOMER_ID} Key=ManagedBy,Value=single-account-setup.sh Key=BootstrapVersion,Value=${BOOTSTRAP_VERSION}"
+  echo "Key=Service,Value=3am Key=CustomerID,Value=${CUSTOMER_ID} Key=ManagedBy,Value=single-account-setup.sh Key=BootstrapVersion,Value=${BOOTSTRAP_VERSION}"
 }
 
 phase5_get_or_create_deployment_role () {
@@ -1485,7 +1485,7 @@ phase5_get_or_create_state_bucket () {
   aws s3api put-bucket-policy --bucket "${STATE_BUCKET_NAME}" \
     --policy "file://${STATE_BUCKET_POLICY_FILE}" >/dev/null
   aws s3api put-bucket-tagging --bucket "${STATE_BUCKET_NAME}" \
-    --tagging "TagSet=[{Key=Service,Value=3am},{Key=CustomerId,Value=${CUSTOMER_ID}},{Key=ManagedBy,Value=single-account-setup.sh},{Key=BootstrapVersion,Value=${BOOTSTRAP_VERSION}}]" >/dev/null
+    --tagging "TagSet=[{Key=Service,Value=3am},{Key=CustomerID,Value=${CUSTOMER_ID}},{Key=ManagedBy,Value=single-account-setup.sh},{Key=BootstrapVersion,Value=${BOOTSTRAP_VERSION}}]" >/dev/null
 }
 
 phase5_get_or_create_lock_table () {
@@ -1505,7 +1505,7 @@ phase5_get_or_create_lock_table () {
       --attribute-definitions AttributeName=LockID,AttributeType=S \
       --key-schema AttributeName=LockID,KeyType=HASH \
       --sse-specification "Enabled=true,SSEType=KMS,KMSMasterKeyId=${CUSTOMER_CMK_ARN}" \
-      --tags "Key=Service,Value=3am" "Key=CustomerId,Value=${CUSTOMER_ID}" \
+      --tags "Key=Service,Value=3am" "Key=CustomerID,Value=${CUSTOMER_ID}" \
              "Key=ManagedBy,Value=single-account-setup.sh" \
              "Key=BootstrapVersion,Value=${BOOTSTRAP_VERSION}" >/dev/null
     log "waiting for lock table ACTIVE"
@@ -1618,7 +1618,7 @@ EOF
               ${mr_flag} \
               --policy "file://${minimal_policy}" \
               --tags "TagKey=Service,TagValue=3am" \
-                     "TagKey=CustomerId,TagValue=${CUSTOMER_ID}" \
+                     "TagKey=CustomerID,TagValue=${CUSTOMER_ID}" \
                      "TagKey=ManagedBy,TagValue=single-account-setup.sh" \
                      "TagKey=BootstrapVersion,TagValue=${BOOTSTRAP_VERSION}" \
               --query 'KeyMetadata.KeyId' --output text)
