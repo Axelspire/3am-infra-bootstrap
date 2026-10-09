@@ -236,7 +236,9 @@ Phase 5 tuning (defaults are correct for the standard AxelSpire setup):
   --axelspire-artifact-kms-key-arn ARN
                                 Key-ID ARN of the customer-region MRK
                                 replica of the per-customer AxelSpire CI
-                                CMK. Required. Must be of the form
+                                CMK. Required on apply unless
+                                --skip-bootstrap (Pass A / Phase 0 only).
+                                Must be of the form
                                 arn:<partition>:kms:<region>:<ci-acct>:key/<id>
                                 (alias ARNs are rejected: IAM Resource
                                 matching does not authorize via aliases),
@@ -765,8 +767,13 @@ resolve_customer_id () {
 phase5_validate_axelspire_kms_arn () {
   # Strict validation runs only on apply: outputs / outputs-json paths
   # may recover the ARN from SSM (see resolve_outputs), so an empty
-  # value at this point is not fatal.
+  # value at this point is not fatal. Pass A (--skip-bootstrap) skips
+  # Phase 5 entirely, so the CI CMK ARN is not needed yet (see
+  # BOOTSTRAP-OPS.md §9).
   [ "${COMMAND}" = "apply" ] || return 0
+  if ${SKIP_BOOTSTRAP}; then
+    return 0
+  fi
   [ -n "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" ] \
     || die "--axelspire-artifact-kms-key-arn is required (key-ID ARN of the customer-region MRK replica; see --help)"
   # MRK key IDs are 'mrk-<32 hex chars>'; single-region CMK key IDs are
@@ -1761,8 +1768,9 @@ do_apply () {
     [ -n "$PLATFORM_ADMIN_USER" ] || die "--platform-admin-user required (or pass --external-idp)"
     [ -n "$BREAKGLASS_USER" ]     || die "--breakglass-user required (or pass --external-idp)"
   fi
-  # --axelspire-artifact-kms-key-arn is required on apply (key-ID ARN of
-  # the customer-region MRK replica; see phase5_validate_axelspire_kms_arn).
+  # --axelspire-artifact-kms-key-arn is required on apply unless
+  # --skip-bootstrap (key-ID ARN of the customer-region MRK replica;
+  # see phase5_validate_axelspire_kms_arn).
 
   preflight
   resolve_customer_id

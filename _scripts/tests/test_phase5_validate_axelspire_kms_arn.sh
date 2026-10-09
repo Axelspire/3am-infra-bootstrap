@@ -7,6 +7,7 @@
 # The validation gates --axelspire-artifact-kms-key-arn on `apply`: the
 # value must be a key-ID ARN (not an alias ARN), and its region must
 # equal DEPLOYMENT_REGION (DynamoDB SSE-KMS requires a same-region key).
+# Pass A (--skip-bootstrap) skips the gate entirely.
 #
 # Sources the script under a BASH_SOURCE guard so main() is not invoked,
 # then exercises the function in subshells with curated globals. The
@@ -33,14 +34,15 @@ ok  () { printf '  \033[32mPASS\033[0m %s\n' "$*"; PASS=$((PASS+1)); }
 bad () { printf '  \033[31mFAIL\033[0m %s\n' "$*"; FAIL=$((FAIL+1)); }
 
 # Run the validator in a subshell with the named globals set.
-# Args: <command> <region> <arn> -> 0 on accept, non-zero on reject.
+# Args: <command> <region> <arn> [skip_bootstrap] -> 0 on accept, non-zero on reject.
 run_validate () {
-  local cmd="$1" region="$2" arn="$3"
+  local cmd="$1" region="$2" arn="$3" skip="${4:-false}"
   (
     set +e
     COMMAND="${cmd}"
     DEPLOYMENT_REGION="${region}"
     AXELSPIRE_ARTIFACT_KMS_KEY_ARN="${arn}"
+    SKIP_BOOTSTRAP="${skip}"
     phase5_validate_axelspire_kms_arn 2>/dev/null
   )
 }
@@ -58,6 +60,11 @@ echo "== Validation skipped on non-apply commands =="
 expect_accept "preflight skips validation (empty ARN)"      preflight    eu-west-1 ""
 expect_accept "outputs-json skips validation (alias ARN)"   outputs-json eu-west-1 "arn:aws:kms:eu-west-1:033113129683:alias/3am-ci/acme"
 expect_accept "outputs skips validation (wrong region)"     outputs      eu-west-1 "arn:aws:kms:us-east-1:033113129683:key/00000000-0000-0000-0000-000000000000"
+
+echo "== Apply --skip-bootstrap: KMS ARN not required (Pass A) =="
+expect_accept "apply --skip-bootstrap accepts empty ARN" apply eu-west-1 "" true
+expect_accept "apply --skip-bootstrap ignores alias ARN" \
+  apply us-east-1 "arn:aws:kms:us-east-1:033113129683:alias/3am-ci/acme" true
 
 echo "== Apply: missing ARN =="
 expect_reject "apply rejects empty ARN" apply eu-west-1 ""
