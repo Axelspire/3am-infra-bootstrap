@@ -521,8 +521,8 @@ Source of truth remains this repo; CloudShell can also
 
 | Script | Public gist |
 | --- | --- |
-| `single-account-setup.sh` | https://gist.github.com/3am-gists/ — see `.github/gist-manifest.json` |
-| `customer-org-setup.sh` | https://gist.github.com/3am-gists/ — see `.github/gist-manifest.json` |
+| `single-account-setup.sh` | https://gist.github.com/3am-gists/42b7fab2ec03f5f9bf58d233d374b9ff |
+| `customer-org-setup.sh` | https://gist.github.com/3am-gists/22eb9853a1f24c62e5fbd3cf6ec04c81 |
 
 Manifest: `.github/gist-manifest.json` (`owner` must be `3am-gists`).
 Sync script: `_scripts/sync-bootstrap-gists.sh` (refuses tokens that are

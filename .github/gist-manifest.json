@@ -1,13 +1,13 @@
 {
   "owner": "3am-gists",
   "single-account-setup.sh": {
-    "gist_id": "",
+    "gist_id": "42b7fab2ec03f5f9bf58d233d374b9ff",
     "filename": "single-account-setup.sh",
     "description": "3AM single-account-setup.sh — auto-synced from Axelspire/3am-infra-bootstrap (_scripts/)",
     "source": "_scripts/single-account-setup.sh"
   },
   "customer-org-setup.sh": {
-    "gist_id": "",
+    "gist_id": "22eb9853a1f24c62e5fbd3cf6ec04c81",
     "filename": "customer-org-setup.sh",
     "description": "3AM customer-org-setup.sh — auto-synced from Axelspire/3am-infra-bootstrap (_scripts/)",
     "source": "_scripts/customer-org-setup.sh"
