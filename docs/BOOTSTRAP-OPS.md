@@ -510,3 +510,18 @@ After editing either script, run:
 ```bash
 ./_scripts/tests/test_phase5_bootstrap_parity.sh
 ```
+
+### 11.5 Public gist mirrors
+
+The two customer scripts are also published as public GitHub gists so
+operators can hand out short gist URLs. Manifest:
+`.github/gist-manifest.json`. Sync script:
+`_scripts/sync-bootstrap-gists.sh`. Workflow:
+`sync-bootstrap-gists` (runs on push to `main` when those scripts
+change, or via `workflow_dispatch`).
+
+**One-time setup:** add repo secret `BOOTSTRAP_GIST_TOKEN` = classic
+PAT with the `gist` scope. Actions' default `GITHUB_TOKEN` cannot
+manage gists. After the secret is set, run **sync-bootstrap-gists**
+once via workflow_dispatch — that creates both gists and commits their
+ids into the manifest. Later script pushes update the same gists.
