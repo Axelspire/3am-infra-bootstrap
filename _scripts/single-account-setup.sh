@@ -23,7 +23,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.33"
+BOOTSTRAP_VERSION="0.2.34"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-10-10"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
