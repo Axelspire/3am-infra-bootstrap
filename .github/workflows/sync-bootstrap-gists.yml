@@ -4,9 +4,10 @@
 name: sync-bootstrap-gists
 
 # Keeps public gists of the two customer bootstrap scripts in sync with
-# _scripts/*. Requires repo secret BOOTSTRAP_GIST_TOKEN — a classic PAT
-# (or fine-grained token) with the `gist` scope. The default GITHUB_TOKEN
-# cannot create/update gists.
+# _scripts/*. Gists are owned by GitHub user 3am-gists (orgs cannot own
+# gists). Requires repo secret BOOTSTRAP_GIST_TOKEN — a classic PAT for
+# that user with the `gist` scope. The default GITHUB_TOKEN cannot
+# create/update gists.
 
 on:
   push:
