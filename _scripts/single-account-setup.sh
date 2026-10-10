@@ -23,7 +23,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.32"
+BOOTSTRAP_VERSION="0.2.33"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-10-10"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
@@ -158,6 +158,7 @@ FROM_HANDOFF_PATH=""   # optional local path (tests / offline); customer uses to
 CLI_SET_CUSTOMER_NAME=false
 CLI_SET_CUSTOMER_ID=false
 CLI_SET_ACCOUNT_EMAIL=false
+CLI_SET_AWS_ACCOUNT_ID=false
 CLI_SET_PLATFORM_ADMIN=false
 CLI_SET_BREAKGLASS=false
 CLI_SET_ALLOWED_REGIONS=false
@@ -165,6 +166,8 @@ CLI_SET_DEPLOYMENT_REGION=false
 CLI_SET_AXELSPIRE_KMS=false
 CLI_SET_AXELSPIRE_S3=false
 CLI_SET_AXELSPIRE_CI_ACCT=false
+# Optional pin: must match the caller account (workload = mgmt in this variant).
+AWS_ACCOUNT_ID=""
 
 pass_b_handoff_url_for_token () {
   local token="$1"
@@ -215,6 +218,7 @@ load_pass_b_handoff () {
   ${CLI_SET_CUSTOMER_NAME} && conflicts="${conflicts} --customer-name"
   ${CLI_SET_CUSTOMER_ID} && conflicts="${conflicts} --customer-id"
   ${CLI_SET_ACCOUNT_EMAIL} && conflicts="${conflicts} --account-email"
+  ${CLI_SET_AWS_ACCOUNT_ID} && conflicts="${conflicts} --aws-account-id"
   ${CLI_SET_PLATFORM_ADMIN} && conflicts="${conflicts} --platform-admin-user"
   ${CLI_SET_BREAKGLASS} && conflicts="${conflicts} --breakglass-user"
   ${CLI_SET_ALLOWED_REGIONS} && conflicts="${conflicts} --allowed-regions"
@@ -237,6 +241,7 @@ load_pass_b_handoff () {
   ci_acct=$(jq -r '.axelspire_ci_account_id // empty' "${path}")
   [ -n "${ci_acct}" ] && AXELSPIRE_CI_ACCOUNT_ID="${ci_acct}"
   ACCOUNT_ID=$(jq -r '.account_id // empty' "${path}")
+  AWS_ACCOUNT_ID="${ACCOUNT_ID}"
 
   [ -n "${CUSTOMER_NAME}" ] || die "--from-handoff: customer_name missing in ${path}"
   [ -n "${CUSTOMER_ID}" ] || die "--from-handoff: customer_id missing in ${path}"
@@ -312,6 +317,12 @@ Auto-derived from the calling AWS account when omitted:
                                 Default: Organization MasterAccountEmail.
 
 Optional:
+  --aws-account-id ID           12-digit workload account. Must equal the
+                                current caller (this variant has no child
+                                account). When omitted on an interactive
+                                TTY, the script prompts you to type the
+                                caller account id to confirm. With
+                                --auto-approve, required.
   --allowed-regions LIST        CSV, default: "eu-west-1,us-east-1".
                                 Used to parameterise the region-deny SCP.
   --deployment-region REGION    Customer workload region: where the state
@@ -423,6 +434,7 @@ parse_args () {
     case "$1" in
       --customer-name)             CUSTOMER_NAME="$2"; CLI_SET_CUSTOMER_NAME=true; shift 2 ;;
       --customer-id)               CUSTOMER_ID="$2"; CLI_SET_CUSTOMER_ID=true; shift 2 ;;
+      --aws-account-id)            AWS_ACCOUNT_ID="$2"; CLI_SET_AWS_ACCOUNT_ID=true; shift 2 ;;
       --allowed-regions)           ALLOWED_REGIONS_CSV="$2"; CLI_SET_ALLOWED_REGIONS=true; shift 2 ;;
       --deployment-region)         DEPLOYMENT_REGION="$2"; CLI_SET_DEPLOYMENT_REGION=true; shift 2 ;;
       --platform-admin-user)       PLATFORM_ADMIN_USER="$2"; CLI_SET_PLATFORM_ADMIN=true; shift 2 ;;
@@ -1816,6 +1828,28 @@ EOF
 # ---------------------------------------------------------------------------
 # apply — full setup, idempotent
 # ---------------------------------------------------------------------------
+confirm_workload_account_id () {
+  local caller=$1 ans
+  if [ -n "${AWS_ACCOUNT_ID}" ]; then
+    [[ "${AWS_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]] \
+      || die "--aws-account-id must be exactly 12 digits (got: '${AWS_ACCOUNT_ID}')"
+    [ "${AWS_ACCOUNT_ID}" = "${caller}" ] \
+      || die "--aws-account-id ${AWS_ACCOUNT_ID} does not match caller account ${caller}. single-account-setup.sh uses the current account as the workload — switch CloudShell/SSO session or use customer-org-setup.sh for a child account."
+    return
+  fi
+  if ${AUTO_APPROVE} || [ ! -t 0 ]; then
+    die "pass --aws-account-id ${caller} to confirm the workload account (current caller). Refusing silent default under --auto-approve / non-interactive."
+  fi
+  say ""
+  say "This script uses the CURRENT caller account as the 3AM workload."
+  read -r -p "Type the workload AWS account ID to confirm [${caller}]: " ans
+  ans="${ans:-${caller}}"
+  [[ "${ans}" =~ ^[0-9]{12}$ ]] || die "workload account id must be exactly 12 digits (got: '${ans}')"
+  [ "${ans}" = "${caller}" ] \
+    || die "typed id ${ans} does not match caller ${caller}. Switch session or use customer-org-setup.sh."
+  AWS_ACCOUNT_ID="${ans}"
+}
+
 do_apply () {
   if ! ${SKIP_ORG} && ! ${EXTERNAL_IDP}; then
     [ -n "$BREAKGLASS_USER" ] || die "--breakglass-user required (or pass --external-idp / --skip-org)"
@@ -1825,12 +1859,14 @@ do_apply () {
   # see phase5_validate_axelspire_kms_arn).
 
   preflight
+  confirm_workload_account_id "${ACCOUNT_ID}"
   resolve_apply_defaults
 
   say
   say "Customer:           ${CUSTOMER_NAME}"
   say "Customer ID slug:   ${CUSTOMER_ID}"
   say "Target account:     ${ACCOUNT_ID} (current caller — used as workload account)"
+  say "Confirmed account:  ${AWS_ACCOUNT_ID}"
   say "Effective region:   ${EFFECTIVE_REGION} (IDC / Organizations)"
   say "Deployment region:  ${DEPLOYMENT_REGION} (state bucket, lock table, CMK)"
   say "Allowed regions:    ${ALLOWED_REGIONS_CSV}"

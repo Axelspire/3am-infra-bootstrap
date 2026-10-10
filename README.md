@@ -97,7 +97,11 @@ module — see [Security model](#security-model) and
 > for the corresponding error if the CMK is missing.
 
 ```sh
-# Multi-account (creates a new child account in a 3AM OU)
+# Multi-account (creates a new child account in a 3AM OU).
+# Default --account-name is 3AM-<customer-id> (never the shared
+# "3AM Production" label). To link an EXISTING child account, pass
+# --aws-account-id <12-digit>; the script prompts when that flag is
+# omitted on an interactive TTY.
 curl -fsSLO https://raw.githubusercontent.com/Axelspire/3am-infra-bootstrap/main/_scripts/customer-org-setup.sh
 chmod +x customer-org-setup.sh
 ./customer-org-setup.sh apply \
@@ -106,16 +110,19 @@ chmod +x customer-org-setup.sh
   --platform-admin-user alice@acme.example.com \
   --breakglass-user bob@acme.example.com \
   --allowed-regions "eu-west-1,us-east-1"
-./customer-org-setup.sh outputs-json > org-setup.json
+# Prefer pinning the workload id for outputs (avoids name collisions):
+./customer-org-setup.sh outputs-json --aws-account-id <workload-12-digit> > org-setup.json
 
 # Single-account (use the current account as the 3AM workload)
 # --customer-name and --platform-admin-user are auto-derived from
 # the IAM account alias and Organization.MasterAccountEmail; only
 # --breakglass-user is mandatory (must be a deliberate identity).
+# Confirm the caller account with --aws-account-id (or type it when prompted).
 curl -fsSLO https://raw.githubusercontent.com/Axelspire/3am-infra-bootstrap/main/_scripts/single-account-setup.sh
 chmod +x single-account-setup.sh
 ./single-account-setup.sh apply \
   --breakglass-user bob@acme.example.com \
+  --aws-account-id <caller-12-digit> \
   --allowed-regions "eu-west-1,us-east-1"
 ./single-account-setup.sh outputs-json > org-setup.json
 ```
@@ -166,14 +173,14 @@ two nested objects — `phase0` (Identity Center / SCPs) and `phase5`
 
 ```json
 {
-  "bootstrap_version": "0.2.31",
+  "bootstrap_version": "0.2.33",
   "bootstrap_variant": "multi-account",
   "bootstrap_script": "customer-org-setup.sh",
   "customer_name": "Acme Corp",
   "customer_id": "acme-corp",
   "mgmt_account_id": "111111111111",
   "account_id": "222222222222",
-  "account_name": "3AM-AcmeCorp",
+  "account_name": "3AM-acme-corp",
   "ou_id": "ou-abcd-12345678",
   "region": "eu-west-1",
   "deployment_region": "eu-west-1",

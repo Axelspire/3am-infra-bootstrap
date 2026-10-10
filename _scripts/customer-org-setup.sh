@@ -14,7 +14,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.32"
+BOOTSTRAP_VERSION="0.2.33"
 BOOTSTRAP_VARIANT="multi-account"
 SCRIPT_LAST_UPDATED="2026-10-10"
 BOOTSTRAP_SCRIPT_NAME="customer-org-setup.sh"
@@ -77,7 +77,10 @@ DRIFT_TRUST_POLICY_FILE="/tmp/3am-drift-reader-trust.json"
 DRIFT_STATE_POLICY_FILE="/tmp/3am-drift-reader-state.json"
 DRIFT_WORKLOAD_POLICY_FILE="/tmp/3am-drift-reader-workload.json"
 
-ACCOUNT_NAME="3AM Production"
+# No silent default — "3AM Production" collided across customers (DEPLOY-32).
+# When unset, apply defaults to "3AM-<customer-id>" after resolve_customer_id.
+ACCOUNT_NAME=""
+AWS_ACCOUNT_ID=""
 OU_NAME="3AM"
 ALLOWED_REGIONS_CSV="eu-west-1,us-east-1"
 PLATFORM_ADMINS_GROUP="3AM-Platform-Admins"
@@ -154,6 +157,8 @@ FROM_HANDOFF_PATH=""   # optional local path (tests / offline); customer uses to
 CLI_SET_CUSTOMER_NAME=false
 CLI_SET_CUSTOMER_ID=false
 CLI_SET_ACCOUNT_EMAIL=false
+CLI_SET_ACCOUNT_NAME=false
+CLI_SET_AWS_ACCOUNT_ID=false
 CLI_SET_PLATFORM_ADMIN=false
 CLI_SET_BREAKGLASS=false
 CLI_SET_ALLOWED_REGIONS=false
@@ -211,6 +216,8 @@ load_pass_b_handoff () {
   ${CLI_SET_CUSTOMER_NAME} && conflicts="${conflicts} --customer-name"
   ${CLI_SET_CUSTOMER_ID} && conflicts="${conflicts} --customer-id"
   ${CLI_SET_ACCOUNT_EMAIL} && conflicts="${conflicts} --account-email"
+  ${CLI_SET_ACCOUNT_NAME} && conflicts="${conflicts} --account-name"
+  ${CLI_SET_AWS_ACCOUNT_ID} && conflicts="${conflicts} --aws-account-id"
   ${CLI_SET_PLATFORM_ADMIN} && conflicts="${conflicts} --platform-admin-user"
   ${CLI_SET_BREAKGLASS} && conflicts="${conflicts} --breakglass-user"
   ${CLI_SET_ALLOWED_REGIONS} && conflicts="${conflicts} --allowed-regions"
@@ -223,6 +230,7 @@ load_pass_b_handoff () {
   CUSTOMER_NAME=$(jq -r '.customer_name // empty' "${path}")
   CUSTOMER_ID=$(jq -r '.customer_id // empty' "${path}")
   ACCOUNT_EMAIL=$(jq -r '.account_email // empty' "${path}")
+  ACCOUNT_NAME=$(jq -r '.account_name // empty' "${path}")
   PLATFORM_ADMIN_USER=$(jq -r '.platform_admin_user // empty' "${path}")
   BREAKGLASS_USER=$(jq -r '.breakglass_user // empty' "${path}")
   ALLOWED_REGIONS_CSV=$(jq -r '.allowed_regions // empty' "${path}")
@@ -233,6 +241,7 @@ load_pass_b_handoff () {
   ci_acct=$(jq -r '.axelspire_ci_account_id // empty' "${path}")
   [ -n "${ci_acct}" ] && AXELSPIRE_CI_ACCOUNT_ID="${ci_acct}"
   ACCOUNT_ID=$(jq -r '.account_id // empty' "${path}")
+  AWS_ACCOUNT_ID="${ACCOUNT_ID}"
 
   [ -n "${CUSTOMER_NAME}" ] || die "--from-handoff: customer_name missing in ${path}"
   [ -n "${CUSTOMER_ID}" ] || die "--from-handoff: customer_id missing in ${path}"
@@ -305,7 +314,17 @@ Optional:
   --customer-id SLUG            Lowercase slug used in resource tags and
                                 the AxelSpire CI key alias. Default: a
                                 slug derived from --customer-name.
-  --account-name NAME           Default: "3AM Production".
+  --aws-account-id ID           12-digit workload (child) AWS account to
+                                link. Required to reuse an existing Org
+                                account. When omitted on an interactive
+                                TTY, the script prompts. With
+                                --auto-approve, required unless creating
+                                a brand-new account (unique --account-name
+                                with no Org name collision).
+  --account-name NAME           Friendly name for a NEW account, or the
+                                existing account's Name for display.
+                                Default: "3AM-<customer-id>" (never the
+                                shared "3AM Production" label).
   --ou-name NAME                Default: "3AM".
   --allowed-regions LIST        CSV, default: "eu-west-1,us-east-1".
   --deployment-region REGION    Customer workload region: where the
@@ -391,18 +410,29 @@ Outputs commands take no per-customer flags; they re-resolve every
 value from AWS using --account-name / --ou-name / group names.
 
 Examples:
-  # First run
+  # First run — create a new workload account (unique name; no --aws-account-id)
   ./customer-org-setup.sh apply \
     --customer-name "Acme Corp" \
     --account-email aws-3am@acme.example.com \
     --platform-admin-user alice@acme.example.com \
     --breakglass-user bob@acme.example.com
 
+  # Link an EXISTING workload account (required when Name already exists)
+  ./customer-org-setup.sh apply \
+    --customer-name "3AM Eyes" \
+    --customer-id 3am-eyes \
+    --account-name "3AM Eyes" \
+    --aws-account-id 415571557053 \
+    --account-email dan@axelspire.com \
+    --platform-admin-user 3am-eyes@axelspire.com \
+    --breakglass-user 3am-eyes@axelspire.com \
+    --skip-bootstrap
+
   # Pass B — 32-hex token from READY CUSTOMER-PACK
   ./customer-org-setup.sh apply --skip-org --from-handoff a1b2c3d4e5f60718293a4b5c6d7e8f90
 
-  # CI ingestion later
-  ./customer-org-setup.sh outputs-json > org-setup.json
+  # CI ingestion later (pin account id — do not rely on --account-name alone)
+  ./customer-org-setup.sh outputs-json --aws-account-id 415571557053 > org-setup.json
 USAGE
 }
 
@@ -415,7 +445,8 @@ parse_args () {
     case "$1" in
       --customer-name)             CUSTOMER_NAME="$2"; CLI_SET_CUSTOMER_NAME=true; shift 2 ;;
       --customer-id)               CUSTOMER_ID="$2"; CLI_SET_CUSTOMER_ID=true; shift 2 ;;
-      --account-name)              ACCOUNT_NAME="$2"; shift 2 ;;
+      --account-name)              ACCOUNT_NAME="$2"; CLI_SET_ACCOUNT_NAME=true; shift 2 ;;
+      --aws-account-id)            AWS_ACCOUNT_ID="$2"; CLI_SET_AWS_ACCOUNT_ID=true; shift 2 ;;
       --account-email)             ACCOUNT_EMAIL="$2"; CLI_SET_ACCOUNT_EMAIL=true; shift 2 ;;
       --ou-name)                   OU_NAME="$2"; shift 2 ;;
       --allowed-regions)           ALLOWED_REGIONS_CSV="$2"; CLI_SET_ALLOWED_REGIONS=true; shift 2 ;;
@@ -546,14 +577,100 @@ get_or_create_ou () {
   echo "$id"
 }
 
-get_or_create_account () {
-  local name=$1 email=$2 id
-  id=$(aws organizations list-accounts \
-        --query "Accounts[?Name==\`${name}\`].Id | [0]" --output text)
-  if [ "$id" != "None" ] && [ -n "$id" ]; then
-    log "reusing account '${name}' = ${id}" >&2
-    echo "$id"; return
+# Validate a 12-digit AWS account id (or empty).
+_validate_aws_account_id_format () {
+  local id=$1
+  [[ "${id}" =~ ^[0-9]{12}$ ]] || die "--aws-account-id must be exactly 12 digits (got: '${id}')"
+}
+
+# Interactive prompt for the workload account when --aws-account-id was
+# omitted. Never silently reuses an Org account by Name alone (DEPLOY-32).
+prompt_workload_account_id () {
+  local name=$1
+  local existing_id existing_name ans
+  existing_id=$(aws organizations list-accounts \
+    --query "Accounts[?Name==\`${name}\` && Status=='ACTIVE'].Id | [0]" \
+    --output text 2>/dev/null || true)
+  [ "${existing_id}" = "None" ] && existing_id=""
+
+  if [ -n "${existing_id}" ]; then
+    say ""
+    say "Org already has an ACTIVE account named '${name}' = ${existing_id}."
+    say "Refusing to reuse it by name alone (DEPLOY-32 / mistaken 3AM Production link)."
+    if [ ! -t 0 ] || ${AUTO_APPROVE}; then
+      die "pass --aws-account-id ${existing_id} to reuse that account, or choose a unique --account-name to create a new one"
+    fi
+    read -r -p "Workload AWS account ID to link (must be 12 digits) [${existing_id}]: " ans
+    ans="${ans:-${existing_id}}"
+    _validate_aws_account_id_format "${ans}"
+    if [ "${ans}" != "${existing_id}" ]; then
+      existing_name=$(aws organizations list-accounts \
+        --query "Accounts[?Id==\`${ans}\`].Name | [0]" --output text 2>/dev/null || true)
+      [ "${existing_name}" = "None" ] && existing_name=""
+      [ -n "${existing_name}" ] \
+        || die "account ${ans} not found in this Organization"
+      say "Note: account ${ans} is named '${existing_name}', not '${name}'. Using id pin."
+      ACCOUNT_NAME="${existing_name}"
+    fi
+    AWS_ACCOUNT_ID="${ans}"
+    return
   fi
+
+  say ""
+  say "No ACTIVE Org account named '${name}'."
+  if [ ! -t 0 ] || ${AUTO_APPROVE}; then
+    log "no --aws-account-id; will CREATE a new account named '${name}'" >&2
+    return
+  fi
+  read -r -p "Workload AWS account ID (12 digits), or press Enter to CREATE '${name}': " ans
+  if [ -z "${ans}" ]; then
+    log "operator chose CREATE for account name '${name}'" >&2
+    return
+  fi
+  _validate_aws_account_id_format "${ans}"
+  existing_name=$(aws organizations list-accounts \
+    --query "Accounts[?Id==\`${ans}\`].Name | [0]" --output text 2>/dev/null || true)
+  [ "${existing_name}" = "None" ] && existing_name=""
+  [ -n "${existing_name}" ] \
+    || die "account ${ans} not found in this Organization (cannot create with a chosen id — omit id to create '${name}')"
+  ACCOUNT_NAME="${existing_name}"
+  AWS_ACCOUNT_ID="${ans}"
+  log "linking existing workload account ${AWS_ACCOUNT_ID} ('${ACCOUNT_NAME}')" >&2
+}
+
+# Resolve / create the workload child account.
+# - With AWS_ACCOUNT_ID set: must already exist; never create; refuse if
+#   --account-name matches a *different* Org account id.
+# - Without AWS_ACCOUNT_ID: create only when Name is free; never reuse by name.
+get_or_create_account () {
+  local name=$1 email=$2 id by_name by_name_status live_name
+  if [ -n "${AWS_ACCOUNT_ID}" ]; then
+    _validate_aws_account_id_format "${AWS_ACCOUNT_ID}"
+    id=$(aws organizations list-accounts \
+          --query "Accounts[?Id==\`${AWS_ACCOUNT_ID}\`].Id | [0]" --output text)
+    [ "$id" != "None" ] && [ -n "$id" ] \
+      || die "--aws-account-id ${AWS_ACCOUNT_ID} not found in this Organization"
+    live_name=$(aws organizations list-accounts \
+      --query "Accounts[?Id==\`${AWS_ACCOUNT_ID}\`].Name | [0]" --output text)
+    by_name=$(aws organizations list-accounts \
+      --query "Accounts[?Name==\`${name}\` && Status=='ACTIVE'].Id | [0]" --output text)
+    if [ -n "${by_name}" ] && [ "${by_name}" != "None" ] && [ "${by_name}" != "${AWS_ACCOUNT_ID}" ]; then
+      die "account-name '${name}' resolves to ${by_name}, but --aws-account-id is ${AWS_ACCOUNT_ID}. Pass a unique --account-name or the matching id."
+    fi
+    ACCOUNT_NAME="${live_name}"
+    log "using pinned workload account ${AWS_ACCOUNT_ID} (Name='${ACCOUNT_NAME}')" >&2
+    echo "${AWS_ACCOUNT_ID}"
+    return
+  fi
+
+  by_name=$(aws organizations list-accounts \
+        --query "Accounts[?Name==\`${name}\`].Id | [0]" --output text)
+  by_name_status=$(aws organizations list-accounts \
+        --query "Accounts[?Name==\`${name}\`].Status | [0]" --output text)
+  if [ "$by_name" != "None" ] && [ -n "$by_name" ]; then
+    die "Org account named '${name}' already exists as ${by_name} (Status=${by_name_status:-unknown}). Pass --aws-account-id ${by_name} to reuse it explicitly, or choose a unique --account-name to create a different workload account."
+  fi
+
   log "creating account '${name}' <${email}>" >&2
   local req_id state
   req_id=$(aws organizations create-account \
@@ -584,6 +701,7 @@ get_or_create_account () {
   id=$(aws organizations describe-create-account-status \
         --create-account-request-id "${req_id}" \
         --query 'CreateAccountStatus.AccountId' --output text)
+  AWS_ACCOUNT_ID="${id}"
   log "created account ${id}" >&2
   echo "$id"
 }
@@ -1906,9 +2024,14 @@ do_apply () {
     [ -n "$PLATFORM_ADMIN_USER" ] || die "--platform-admin-user required (or pass --external-idp / --from-handoff)"
     [ -n "$BREAKGLASS_USER" ]     || die "--breakglass-user required (or pass --external-idp / --from-handoff)"
   fi
+  if [ -n "${AWS_ACCOUNT_ID}" ]; then
+    _validate_aws_account_id_format "${AWS_ACCOUNT_ID}"
+  fi
   if ${SKIP_ORG}; then
     [ -n "$CUSTOMER_ID" ] || die "--skip-org / --from-handoff requires customer_id"
-    if [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "None" ]; then
+    if [ -n "${AWS_ACCOUNT_ID}" ]; then
+      ACCOUNT_ID="${AWS_ACCOUNT_ID}"
+    elif [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "None" ]; then
       ACCOUNT_ID=""
       for aid in $(aws organizations list-accounts --query "Accounts[?Status=='ACTIVE'].Id" --output text 2>/dev/null); do
         [ -n "$aid" ] || continue
@@ -1916,7 +2039,8 @@ do_apply () {
         if [ "$cid" = "$CUSTOMER_ID" ]; then ACCOUNT_ID="$aid"; break; fi
       done
     fi
-    [ -n "$ACCOUNT_ID" ] && [ "$ACCOUNT_ID" != "None" ] || die "--skip-org: could not resolve ACCOUNT_ID for customer_id=${CUSTOMER_ID}"
+    [ -n "$ACCOUNT_ID" ] && [ "$ACCOUNT_ID" != "None" ] || die "--skip-org: could not resolve ACCOUNT_ID for customer_id=${CUSTOMER_ID} (pass --aws-account-id or --from-handoff)"
+    AWS_ACCOUNT_ID="${ACCOUNT_ID}"
   fi
   # --axelspire-artifact-kms-key-arn is required on apply unless
   # --skip-bootstrap (key-ID ARN of the customer-region MRK replica;
@@ -1924,12 +2048,20 @@ do_apply () {
 
   preflight
   resolve_customer_id
+  if [ -z "${ACCOUNT_NAME}" ]; then
+    ACCOUNT_NAME="3AM-${CUSTOMER_ID}"
+    log "defaulted --account-name to '${ACCOUNT_NAME}' (unique per customer; was historically '3AM Production')"
+  fi
+  if ! ${SKIP_ORG} && [ -z "${AWS_ACCOUNT_ID}" ]; then
+    prompt_workload_account_id "${ACCOUNT_NAME}"
+  fi
   phase5_compute_axelspire_arns
 
   say
   say "Customer:           ${CUSTOMER_NAME}"
   say "Customer ID slug:   ${CUSTOMER_ID}"
-  say "AWS account:        ${ACCOUNT_NAME} <${ACCOUNT_EMAIL}>"
+  say "AWS account name:   ${ACCOUNT_NAME} <${ACCOUNT_EMAIL}>"
+  say "Workload account:   ${AWS_ACCOUNT_ID:-<CREATE NEW>}"
   say "Parent OU:          ${OU_NAME}"
   say "Effective region:   ${EFFECTIVE_REGION} (IDC / Organizations)"
   say "Deployment region:  ${DEPLOYMENT_REGION} (state bucket, lock table, CMK)"
@@ -1959,6 +2091,7 @@ do_apply () {
 
   log "== Phase 0 step 2/6: AWS account =="
   ACCOUNT_ID=$(get_or_create_account "${ACCOUNT_NAME}" "${ACCOUNT_EMAIL}")
+  AWS_ACCOUNT_ID="${ACCOUNT_ID}"
   move_account_if_needed "${ACCOUNT_ID}" "${OU_ID}"
   tag_child_account_with_customer_metadata
 
@@ -2079,9 +2212,31 @@ resolve_outputs () {
            --parent-id "${ROOT_ID}" \
            --query "OrganizationalUnits[?Name==\`${OU_NAME}\`].Id | [0]" \
            --output text 2>/dev/null || echo "")
-  ACCOUNT_ID=$(aws organizations list-accounts \
-                --query "Accounts[?Name==\`${ACCOUNT_NAME}\`].Id | [0]" \
-                --output text 2>/dev/null || echo "")
+
+  # Prefer --aws-account-id. Name-only lookup is unsafe when multiple
+  # customers shared the historical "3AM Production" label (DEPLOY-32).
+  if [ -n "${AWS_ACCOUNT_ID}" ]; then
+    _validate_aws_account_id_format "${AWS_ACCOUNT_ID}"
+    ACCOUNT_ID="${AWS_ACCOUNT_ID}"
+    local pinned_name
+    pinned_name=$(aws organizations list-accounts \
+      --query "Accounts[?Id==\`${ACCOUNT_ID}\`].Name | [0]" \
+      --output text 2>/dev/null || echo "")
+    [ "${pinned_name}" = "None" ] && pinned_name=""
+    [ -n "${pinned_name}" ] \
+      || die "--aws-account-id ${ACCOUNT_ID} not found in this Organization"
+    ACCOUNT_NAME="${pinned_name}"
+  elif [ -n "${ACCOUNT_NAME}" ]; then
+    ACCOUNT_ID=$(aws organizations list-accounts \
+                  --query "Accounts[?Name==\`${ACCOUNT_NAME}\`].Id | [0]" \
+                  --output text 2>/dev/null || echo "")
+    if [ -n "${ACCOUNT_ID}" ] && [ "${ACCOUNT_ID}" != "None" ]; then
+      warn "outputs: resolved account by --account-name '${ACCOUNT_NAME}' → ${ACCOUNT_ID}. Prefer --aws-account-id to avoid name collisions."
+    fi
+  else
+    ACCOUNT_ID=""
+    die "outputs: pass --aws-account-id <12-digit> (preferred) or --account-name <unique Name>"
+  fi
 
   # Recover customer_id / customer_name / deployment_region from the
   # child-account tags written by tag_child_account_with_customer_metadata
