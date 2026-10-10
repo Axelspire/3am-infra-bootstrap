@@ -173,7 +173,7 @@ two nested objects — `phase0` (Identity Center / SCPs) and `phase5`
 
 ```json
 {
-  "bootstrap_version": "0.2.33",
+  "bootstrap_version": "0.2.34",
   "bootstrap_variant": "multi-account",
   "bootstrap_script": "customer-org-setup.sh",
   "customer_name": "Acme Corp",
