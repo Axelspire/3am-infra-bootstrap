@@ -126,6 +126,12 @@ Before running, collect from the customer (intake form §1, §3):
 | `--account-email` *(multi-account only)* | Intake §3 root email for the new account |
 | `--platform-admin-user` | Intake §3 technical contact email (or designated platform admin) |
 | `--breakglass-user` | Intake §3 break-glass contact email |
+
+`outputs-json` echoes those identity fields back under `phase0.platform_admin_user`,
+`phase0.breakglass_user`, and `phase0.account_email`, plus top-level
+`bootstrap_script` (`single-account-setup.sh` or `customer-org-setup.sh`) and
+`bootstrap_variant`. Apply also writes them to SSM under `/3am/bootstrap/*` so a
+later `outputs-json` in a fresh shell can recover them.
 | `--allowed-regions` | Intake §3 primary region + any pre-approved secondaries |
 | `--deployment-region` *(optional)* | Intake §3 primary deployment region — pass only when it differs from the IDC home region the script's `AWS_REGION` points at |
 

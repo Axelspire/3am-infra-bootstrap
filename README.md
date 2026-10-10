@@ -166,7 +166,9 @@ two nested objects — `phase0` (Identity Center / SCPs) and `phase5`
 
 ```json
 {
-  "bootstrap_version": "0.1.0",
+  "bootstrap_version": "0.2.29",
+  "bootstrap_variant": "multi-account",
+  "bootstrap_script": "customer-org-setup.sh",
   "customer_name": "Acme Corp",
   "customer_id": "acme-corp",
   "mgmt_account_id": "111111111111",
@@ -182,6 +184,9 @@ two nested objects — `phase0` (Identity Center / SCPs) and `phase5`
     "identity_store_id": "d-90661a8c5a",
     "region_deny_policy_id": "p-0n0msfyr",
     "root_user_deny_policy_id": "p-sjxlgst5",
+    "platform_admin_user": "alice@acme.example.com",
+    "breakglass_user": "bob@acme.example.com",
+    "account_email": "aws-3am@acme.example.com",
     "platform_admin_permission_set_arn": "arn:aws:sso:::permissionSet/…",
     "breakglass_permission_set_arn":     "arn:aws:sso:::permissionSet/…",
     "platform_admins_group_id": "64a8f4a8-…",

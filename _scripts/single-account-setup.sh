@@ -23,9 +23,9 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.28"
+BOOTSTRAP_VERSION="0.2.29"
 BOOTSTRAP_VARIANT="single-account"
-SCRIPT_LAST_UPDATED="2026-09-29"
+SCRIPT_LAST_UPDATED="2026-10-10"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
 BOOTSTRAP_REPO="${BOOTSTRAP_REPO:-Axelspire/3am-infra-bootstrap}"
 BOOTSTRAP_GIT_REF="${BOOTSTRAP_GIT_REF:-main}"
@@ -114,6 +114,7 @@ CUSTOMER_CMK_ALIAS="alias/3am-customer-cmk"
 # Per-customer inputs (no defaults — must be supplied on first apply).
 CUSTOMER_NAME=""
 CUSTOMER_ID=""
+ACCOUNT_EMAIL=""
 PLATFORM_ADMIN_USER=""
 BREAKGLASS_USER=""
 
@@ -1544,6 +1545,11 @@ phase5_put_ssm_params () {
   _put_ssm /3am/axelspire/artifact-s3-bucket-arn "ARN of the AxelSpire CI artifacts S3 bucket." "${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}"
   _put_ssm /3am/bootstrap/version     "Version of the bootstrap that was last applied." "${BOOTSTRAP_VERSION}"
   _put_ssm /3am/bootstrap/applied-at  "Timestamp of the last apply of the bootstrap." "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  _put_ssm /3am/bootstrap/variant     "Bootstrap variant (single-account | multi-account)." "${BOOTSTRAP_VARIANT}"
+  _put_ssm /3am/bootstrap/script      "Bootstrap script filename that last applied." "${BOOTSTRAP_SCRIPT_NAME}"
+  _put_ssm /3am/bootstrap/platform-admin-user "IdC platform-admin user email passed at apply." "${PLATFORM_ADMIN_USER}"
+  _put_ssm /3am/bootstrap/breakglass-user     "IdC break-glass user email passed at apply." "${BREAKGLASS_USER}"
+  _put_ssm /3am/bootstrap/account-email       "Org account root email (multi-account only; empty for single-account)." "${ACCOUNT_EMAIL}"
 }
 
 # Main Phase 5 entry-point. Assumes preflight has resolved ACCOUNT_ID,
@@ -1864,6 +1870,25 @@ resolve_outputs () {
   fi
   STATE_BUCKET_NAME="3am-state-${ACCOUNT_ID}-${DEPLOYMENT_REGION}"
   aws s3api head-bucket --bucket "${STATE_BUCKET_NAME}" --region "${DEPLOYMENT_REGION}" 2>/dev/null || STATE_BUCKET_NAME=""
+
+  # Recover identity emails / script id written by phase5_put_ssm_params so
+  # outputs-json in a fresh shell still reports what the customer typed.
+  _ssm_get () {
+    local v
+    v=$(aws ssm get-parameter --name "$1" --region "${DEPLOYMENT_REGION}" \
+          --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+    [ "$v" = "None" ] && v=""
+    printf '%s' "$v"
+  }
+  if [ -z "${PLATFORM_ADMIN_USER}" ]; then
+    PLATFORM_ADMIN_USER="$(_ssm_get /3am/bootstrap/platform-admin-user)"
+  fi
+  if [ -z "${BREAKGLASS_USER}" ]; then
+    BREAKGLASS_USER="$(_ssm_get /3am/bootstrap/breakglass-user)"
+  fi
+  if [ -z "${ACCOUNT_EMAIL}" ]; then
+    ACCOUNT_EMAIL="$(_ssm_get /3am/bootstrap/account-email)"
+  fi
 }
 
 print_outputs_human () {
@@ -1873,6 +1898,10 @@ print_outputs_human () {
   3AM single-account-setup — outputs
 ================================================================
   customer_name                       : ${CUSTOMER_NAME:-<unknown>}
+  bootstrap_script                    : ${BOOTSTRAP_SCRIPT_NAME}
+  platform_admin_user                 : ${PLATFORM_ADMIN_USER:-<unset>}
+  breakglass_user                     : ${BREAKGLASS_USER:-<unset>}
+  account_email                       : ${ACCOUNT_EMAIL:-<n/a single-account>}
   customer_id                         : ${CUSTOMER_ID:-<unknown>}
   account_id                          : ${ACCOUNT_ID:-<missing>}
   region                              : ${DEPLOYMENT_REGION:-<missing>}
@@ -1954,9 +1983,14 @@ print_outputs_json () {
       --arg axelspire_s3_arn           "${AXELSPIRE_ARTIFACT_S3_BUCKET_ARN}" \
       --arg bootstrap_version          "${BOOTSTRAP_VERSION}" \
       --arg bootstrap_variant          "${BOOTSTRAP_VARIANT}" \
+      --arg bootstrap_script           "${BOOTSTRAP_SCRIPT_NAME}" \
+      --arg platform_admin_user        "${PLATFORM_ADMIN_USER}" \
+      --arg breakglass_user            "${BREAKGLASS_USER}" \
+      --arg account_email              "${ACCOUNT_EMAIL}" \
       '{
         bootstrap_version: $bootstrap_version,
         bootstrap_variant: $bootstrap_variant,
+        bootstrap_script: $bootstrap_script,
         customer_name: $customer_name,
         customer_id: $customer_id,
         account_id: $account_id,
@@ -1970,6 +2004,9 @@ print_outputs_json () {
           identity_store_id: $identity_store_id,
           region_deny_policy_id: $region_policy_id,
           root_user_deny_policy_id: $root_policy_id,
+          platform_admin_user: $platform_admin_user,
+          breakglass_user: $breakglass_user,
+          account_email: $account_email,
           platform_admin_permission_set_arn: $ps_platform_arn,
           breakglass_permission_set_arn: $ps_breakglass_arn,
           platform_admins_group_id: $pa_group_id,
@@ -2004,6 +2041,7 @@ print_outputs_json () {
     printf '{\n'
     printf '  "bootstrap_version": "%s",\n'                   "${BOOTSTRAP_VERSION}"
     printf '  "bootstrap_variant": "%s",\n'                   "${BOOTSTRAP_VARIANT}"
+    printf '  "bootstrap_script": "%s",\n'                    "${BOOTSTRAP_SCRIPT_NAME}"
     printf '  "customer_name": "%s",\n'                       "${CUSTOMER_NAME}"
     printf '  "customer_id": "%s",\n'                         "${CUSTOMER_ID}"
     printf '  "account_id": "%s",\n'                          "${ACCOUNT_ID}"
@@ -2015,6 +2053,9 @@ print_outputs_json () {
     printf '  "identity_store_id": "%s",\n'                   "${IDSTORE_ID}"
     printf '  "region_deny_policy_id": "%s",\n'               "${REGION_POLICY_ID}"
     printf '  "root_user_deny_policy_id": "%s",\n'            "${ROOT_POLICY_ID}"
+    printf '  "platform_admin_user": "%s",\n'                 "${PLATFORM_ADMIN_USER}"
+    printf '  "breakglass_user": "%s",\n'                     "${BREAKGLASS_USER}"
+    printf '  "account_email": "%s",\n'                       "${ACCOUNT_EMAIL}"
     printf '  "platform_admin_permission_set_arn": "%s",\n'   "${PS_PLATFORM_ARN}"
     printf '  "breakglass_permission_set_arn": "%s",\n'       "${PS_BREAKGLASS_ARN}"
     printf '  "platform_admins_group_id": "%s",\n'            "${PA_GROUP_ID}"
