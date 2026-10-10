@@ -14,7 +14,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.33"
+BOOTSTRAP_VERSION="0.2.34"
 BOOTSTRAP_VARIANT="multi-account"
 SCRIPT_LAST_UPDATED="2026-10-10"
 BOOTSTRAP_SCRIPT_NAME="customer-org-setup.sh"
@@ -583,14 +583,51 @@ _validate_aws_account_id_format () {
   [[ "${id}" =~ ^[0-9]{12}$ ]] || die "--aws-account-id must be exactly 12 digits (got: '${id}')"
 }
 
+# Pin lookup via describe-account (not list-accounts + JMESPath). Avoids
+# pagination / filter misses that produced false "not found in this
+# Organization" when the IdC portal still listed the account (DEPLOY-32).
+org_describe_account () {
+  local id=$1
+  # stdout: Id<TAB>Name<TAB>Status  (empty if not in this Org)
+  aws organizations describe-account --account-id "${id}" \
+    --query 'Account.[Id,Name,Status]' --output text 2>/dev/null || true
+}
+
+# Name → Id via full list-accounts JSON (CLI auto-paginates) + jq.
+org_account_id_by_name () {
+  local name=$1 active_only=${2:-false}
+  command -v jq >/dev/null 2>&1 || die "jq required for Org account name lookup"
+  aws organizations list-accounts --output json \
+    | jq -r --arg n "${name}" --argjson active_only "${active_only}" '
+        .Accounts[]
+        | select(.Name == $n)
+        | select(($active_only | not) or .Status == "ACTIVE")
+        | .Id' \
+    | head -n1
+}
+
+org_account_status_by_name () {
+  local name=$1
+  command -v jq >/dev/null 2>&1 || die "jq required for Org account name lookup"
+  aws organizations list-accounts --output json \
+    | jq -r --arg n "${name}" '.Accounts[] | select(.Name == $n) | .Status' \
+    | head -n1
+}
+
+_die_account_not_in_org () {
+  local id=$1
+  local caller mgmt
+  caller=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "?")
+  mgmt=$(aws organizations describe-organization --query 'Organization.MasterAccountId' --output text 2>/dev/null || echo "?")
+  die "--aws-account-id ${id} not found in this Organization (caller=${caller}, Org management=${mgmt}). IdC portal visibility ≠ Org membership. Run: aws organizations describe-account --account-id ${id}; aws organizations list-accounts --query 'Accounts[].[Id,Name,Status]' --output table. Fix: CloudShell in Org management ${mgmt}, or Organizations → Add AWS account / invite ${id} and accept before re-running Pass A."
+}
+
 # Interactive prompt for the workload account when --aws-account-id was
 # omitted. Never silently reuses an Org account by Name alone (DEPLOY-32).
 prompt_workload_account_id () {
   local name=$1
-  local existing_id existing_name ans
-  existing_id=$(aws organizations list-accounts \
-    --query "Accounts[?Name==\`${name}\` && Status=='ACTIVE'].Id | [0]" \
-    --output text 2>/dev/null || true)
+  local existing_id existing_name ans desc
+  existing_id=$(org_account_id_by_name "${name}" true)
   [ "${existing_id}" = "None" ] && existing_id=""
 
   if [ -n "${existing_id}" ]; then
@@ -604,11 +641,9 @@ prompt_workload_account_id () {
     ans="${ans:-${existing_id}}"
     _validate_aws_account_id_format "${ans}"
     if [ "${ans}" != "${existing_id}" ]; then
-      existing_name=$(aws organizations list-accounts \
-        --query "Accounts[?Id==\`${ans}\`].Name | [0]" --output text 2>/dev/null || true)
-      [ "${existing_name}" = "None" ] && existing_name=""
-      [ -n "${existing_name}" ] \
-        || die "account ${ans} not found in this Organization"
+      desc=$(org_describe_account "${ans}")
+      [ -n "${desc}" ] || _die_account_not_in_org "${ans}"
+      existing_name=$(printf '%s\n' "${desc}" | awk -F'\t' '{print $2}')
       say "Note: account ${ans} is named '${existing_name}', not '${name}'. Using id pin."
       ACCOUNT_NAME="${existing_name}"
     fi
@@ -628,11 +663,9 @@ prompt_workload_account_id () {
     return
   fi
   _validate_aws_account_id_format "${ans}"
-  existing_name=$(aws organizations list-accounts \
-    --query "Accounts[?Id==\`${ans}\`].Name | [0]" --output text 2>/dev/null || true)
-  [ "${existing_name}" = "None" ] && existing_name=""
-  [ -n "${existing_name}" ] \
-    || die "account ${ans} not found in this Organization (cannot create with a chosen id — omit id to create '${name}')"
+  desc=$(org_describe_account "${ans}")
+  [ -n "${desc}" ] || _die_account_not_in_org "${ans}"
+  existing_name=$(printf '%s\n' "${desc}" | awk -F'\t' '{print $2}')
   ACCOUNT_NAME="${existing_name}"
   AWS_ACCOUNT_ID="${ans}"
   log "linking existing workload account ${AWS_ACCOUNT_ID} ('${ACCOUNT_NAME}')" >&2
@@ -643,31 +676,29 @@ prompt_workload_account_id () {
 #   --account-name matches a *different* Org account id.
 # - Without AWS_ACCOUNT_ID: create only when Name is free; never reuse by name.
 get_or_create_account () {
-  local name=$1 email=$2 id by_name by_name_status live_name
+  local name=$1 email=$2 id by_name by_name_status live_name live_status desc
   if [ -n "${AWS_ACCOUNT_ID}" ]; then
     _validate_aws_account_id_format "${AWS_ACCOUNT_ID}"
-    id=$(aws organizations list-accounts \
-          --query "Accounts[?Id==\`${AWS_ACCOUNT_ID}\`].Id | [0]" --output text)
-    [ "$id" != "None" ] && [ -n "$id" ] \
-      || die "--aws-account-id ${AWS_ACCOUNT_ID} not found in this Organization"
-    live_name=$(aws organizations list-accounts \
-      --query "Accounts[?Id==\`${AWS_ACCOUNT_ID}\`].Name | [0]" --output text)
-    by_name=$(aws organizations list-accounts \
-      --query "Accounts[?Name==\`${name}\` && Status=='ACTIVE'].Id | [0]" --output text)
+    desc=$(org_describe_account "${AWS_ACCOUNT_ID}")
+    [ -n "${desc}" ] || _die_account_not_in_org "${AWS_ACCOUNT_ID}"
+    id=$(printf '%s\n' "${desc}" | awk -F'\t' '{print $1}')
+    live_name=$(printf '%s\n' "${desc}" | awk -F'\t' '{print $2}')
+    live_status=$(printf '%s\n' "${desc}" | awk -F'\t' '{print $3}')
+    [ "${live_status}" = "ACTIVE" ] \
+      || die "--aws-account-id ${AWS_ACCOUNT_ID} is in the Org but Status=${live_status} (need ACTIVE; accept invite if INVITED)"
+    by_name=$(org_account_id_by_name "${name}" true)
     if [ -n "${by_name}" ] && [ "${by_name}" != "None" ] && [ "${by_name}" != "${AWS_ACCOUNT_ID}" ]; then
       die "account-name '${name}' resolves to ${by_name}, but --aws-account-id is ${AWS_ACCOUNT_ID}. Pass a unique --account-name or the matching id."
     fi
     ACCOUNT_NAME="${live_name}"
-    log "using pinned workload account ${AWS_ACCOUNT_ID} (Name='${ACCOUNT_NAME}')" >&2
+    log "using pinned workload account ${AWS_ACCOUNT_ID} (Name='${ACCOUNT_NAME}', Status=${live_status})" >&2
     echo "${AWS_ACCOUNT_ID}"
     return
   fi
 
-  by_name=$(aws organizations list-accounts \
-        --query "Accounts[?Name==\`${name}\`].Id | [0]" --output text)
-  by_name_status=$(aws organizations list-accounts \
-        --query "Accounts[?Name==\`${name}\`].Status | [0]" --output text)
-  if [ "$by_name" != "None" ] && [ -n "$by_name" ]; then
+  by_name=$(org_account_id_by_name "${name}" false)
+  by_name_status=$(org_account_status_by_name "${name}")
+  if [ -n "$by_name" ] && [ "$by_name" != "None" ]; then
     die "Org account named '${name}' already exists as ${by_name} (Status=${by_name_status:-unknown}). Pass --aws-account-id ${by_name} to reuse it explicitly, or choose a unique --account-name to create a different workload account."
   fi
 
@@ -2213,23 +2244,18 @@ resolve_outputs () {
            --query "OrganizationalUnits[?Name==\`${OU_NAME}\`].Id | [0]" \
            --output text 2>/dev/null || echo "")
 
-  # Prefer --aws-account-id. Name-only lookup is unsafe when multiple
-  # customers shared the historical "3AM Production" label (DEPLOY-32).
+  # Prefer --aws-account-id via describe-account (DEPLOY-32). Name-only
+  # lookup is unsafe when multiple customers shared "3AM Production".
   if [ -n "${AWS_ACCOUNT_ID}" ]; then
     _validate_aws_account_id_format "${AWS_ACCOUNT_ID}"
+    local pinned_desc pinned_name
+    pinned_desc=$(org_describe_account "${AWS_ACCOUNT_ID}")
+    [ -n "${pinned_desc}" ] || _die_account_not_in_org "${AWS_ACCOUNT_ID}"
     ACCOUNT_ID="${AWS_ACCOUNT_ID}"
-    local pinned_name
-    pinned_name=$(aws organizations list-accounts \
-      --query "Accounts[?Id==\`${ACCOUNT_ID}\`].Name | [0]" \
-      --output text 2>/dev/null || echo "")
-    [ "${pinned_name}" = "None" ] && pinned_name=""
-    [ -n "${pinned_name}" ] \
-      || die "--aws-account-id ${ACCOUNT_ID} not found in this Organization"
+    pinned_name=$(printf '%s\n' "${pinned_desc}" | awk -F'\t' '{print $2}')
     ACCOUNT_NAME="${pinned_name}"
   elif [ -n "${ACCOUNT_NAME}" ]; then
-    ACCOUNT_ID=$(aws organizations list-accounts \
-                  --query "Accounts[?Name==\`${ACCOUNT_NAME}\`].Id | [0]" \
-                  --output text 2>/dev/null || echo "")
+    ACCOUNT_ID=$(org_account_id_by_name "${ACCOUNT_NAME}" false)
     if [ -n "${ACCOUNT_ID}" ] && [ "${ACCOUNT_ID}" != "None" ]; then
       warn "outputs: resolved account by --account-name '${ACCOUNT_NAME}' → ${ACCOUNT_ID}. Prefer --aws-account-id to avoid name collisions."
     fi
