@@ -23,7 +23,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.30"
+BOOTSTRAP_VERSION="0.2.31"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-10-10"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
@@ -148,11 +148,13 @@ AXELSPIRE_ARTIFACT_KMS_KEY_ARN=""
 AXELSPIRE_ARTIFACT_S3_BUCKET_ARN=""
 
 # ---------------------------------------------------------------------------
-# Pass B handoff (DEPLOY-33) — locked identity from capability-URL JSON
+# Pass B handoff (DEPLOY-33) — locked identity from 32-hex capability token
 # ---------------------------------------------------------------------------
 DEFAULT_HANDOFF_PATH="${HOME}/3am-pass-b-handoff.json"
+PASS_B_HANDOFF_KEY_PREFIX="handoff"
 FROM_HANDOFF=false
-FROM_HANDOFF_PATH=""
+FROM_HANDOFF_TOKEN=""
+FROM_HANDOFF_PATH=""   # optional local path (tests / offline); customer uses token
 CLI_SET_CUSTOMER_NAME=false
 CLI_SET_CUSTOMER_ID=false
 CLI_SET_ACCOUNT_EMAIL=false
@@ -164,9 +166,35 @@ CLI_SET_AXELSPIRE_KMS=false
 CLI_SET_AXELSPIRE_S3=false
 CLI_SET_AXELSPIRE_CI_ACCT=false
 
+pass_b_handoff_url_for_token () {
+  local token="$1"
+  local acct="${AXELSPIRE_CI_ACCOUNT_ID:-033113129683}"
+  local region="${AXELSPIRE_CI_REGION:-eu-west-1}"
+  printf 'https://3am-ci-pass-b-handoff-%s.s3.%s.amazonaws.com/%s/%s.json' \
+    "${acct}" "${region}" "${PASS_B_HANDOFF_KEY_PREFIX}" "${token}"
+}
+
+fetch_pass_b_handoff_token () {
+  local token="$1"
+  local path="${DEFAULT_HANDOFF_PATH}"
+  local url
+  [[ "${token}" =~ ^[0-9a-fA-F]{32}$ ]] \
+    || die "--from-handoff: token must be exactly 32 hex characters (got: ${token})"
+  token="$(printf '%s' "${token}" | tr 'A-F' 'a-f')"
+  command -v curl >/dev/null 2>&1 || die "--from-handoff requires curl to download the handoff"
+  url="$(pass_b_handoff_url_for_token "${token}")"
+  log "downloading Pass B handoff (token ${token:0:8}…) → ${path}"
+  curl -fsS "${url}" -o "${path}" \
+    || die "--from-handoff: download failed for token ${token} (expired, wrong token, or network?). Ask AxelSpire to re-publish."
+  FROM_HANDOFF_PATH="${path}"
+}
+
 load_pass_b_handoff () {
+  if [ -n "${FROM_HANDOFF_TOKEN}" ]; then
+    fetch_pass_b_handoff_token "${FROM_HANDOFF_TOKEN}"
+  fi
   local path="${FROM_HANDOFF_PATH:-${DEFAULT_HANDOFF_PATH}}"
-  [ -f "${path}" ] || die "--from-handoff: file not found: ${path} (download the capability URL to ${DEFAULT_HANDOFF_PATH})"
+  [ -f "${path}" ] || die "--from-handoff: file not found: ${path} (pass a 32-hex token from CUSTOMER-PACK)"
   command -v jq >/dev/null 2>&1 || die "--from-handoff requires jq"
   jq -e . "${path}" >/dev/null 2>&1 || die "--from-handoff: invalid JSON in ${path}"
 
@@ -307,6 +335,12 @@ Optional:
   --skip-org                    Skip Phase 0 and run Phase 5 only (useful
                                 when re-running after a partial Phase 5
                                 failure, or when Phase 0 was done out-of-band).
+  --from-handoff TOKEN          Pass B (DEPLOY-33): download locked
+                                identity + KMS from the CI capability
+                                object identified by TOKEN (exactly 32
+                                hex chars from CUSTOMER-PACK). Implies
+                                --skip-org. Conflicting identity / KMS
+                                CLI flags are rejected.
 
 Phase 5 tuning (defaults are correct for the standard AxelSpire setup):
   --axelspire-ci-account-id ID  Default: 033113129683.
@@ -369,6 +403,9 @@ Examples:
     --platform-admin-user alice@acme.example.com \
     --breakglass-user bob@acme.example.com
 
+  # Pass B — 32-hex token from READY CUSTOMER-PACK
+  ./single-account-setup.sh apply --skip-org --from-handoff a1b2c3d4e5f60718293a4b5c6d7e8f90
+
   # CI ingestion later
   ./single-account-setup.sh outputs-json > single-account-setup.json
 USAGE
@@ -398,11 +435,17 @@ parse_args () {
       --skip-org)                  SKIP_ORG=true; shift ;;
       --from-handoff)
         FROM_HANDOFF=true
-        if [ -n "${2:-}" ] && [ "${2#-}" = "$2" ]; then
-          FROM_HANDOFF_PATH="$2"; shift 2
+        [ -n "${2:-}" ] && [ "${2#-}" = "$2" ] \
+          || die "--from-handoff requires a 32-hex token from CUSTOMER-PACK"
+        if [[ "$2" =~ ^[0-9a-fA-F]{32}$ ]]; then
+          FROM_HANDOFF_TOKEN="$2"
+        elif [ -f "$2" ] || [[ "$2" == */* ]] || [[ "$2" == *.json ]]; then
+          # Ops / unit-test override: load a local handoff JSON path.
+          FROM_HANDOFF_PATH="$2"
         else
-          FROM_HANDOFF_PATH="${DEFAULT_HANDOFF_PATH}"; shift
+          die "--from-handoff: expected 32 hex characters, got: $2"
         fi
+        shift 2
         ;;
 
       --axelspire-ci-account-id)   AXELSPIRE_CI_ACCOUNT_ID="$2"; CLI_SET_AXELSPIRE_CI_ACCT=true; shift 2 ;;

@@ -33,17 +33,22 @@ cat > "${HANDOFF}" <<EOF
 }
 EOF
 
-# Source only the loader by extracting it — exercise via bash -c with stubs.
 export HOME="${TMP}"
-# HANDOFF already lives at $HOME/3am-pass-b-handoff.json
+
+# Extract handoff helpers through the end of load_pass_b_handoff (column-0 }).
+LOADER="$(awk '
+  /^DEFAULT_HANDOFF_PATH=/ {on=1}
+  on {print}
+  /^load_pass_b_handoff \(\)/ {want_close=1}
+  want_close && /^}/ {exit}
+' "${SCRIPT}")"
 
 # Reject conflicting CLI
 set +e
 out="$(bash -c '
-  source /dev/null
   die(){ echo "ERROR: $*" >&2; exit 1; }
   log(){ :; }
-  '"$(sed -n "/^DEFAULT_HANDOFF_PATH=/,/^}/p" "${SCRIPT}")"'
+  '"${LOADER}"'
   CLI_SET_CUSTOMER_ID=true
   FROM_HANDOFF_PATH="'"${HANDOFF}"'"
   load_pass_b_handoff
@@ -54,11 +59,11 @@ set -e
 echo "$out" | grep -q "do not pass locked flags" || die "missing conflict message: $out"
 pass "rejects locked CLI flags"
 
-# Happy path loads values
+# Happy path loads values from local path (ops/test override)
 eval "$(bash -c '
   die(){ echo "ERROR: $*" >&2; exit 1; }
   log(){ :; }
-  '"$(sed -n "/^DEFAULT_HANDOFF_PATH=/,/^}/p" "${SCRIPT}")"'
+  '"${LOADER}"'
   FROM_HANDOFF_PATH="'"${HANDOFF}"'"
   load_pass_b_handoff
   printf "CUSTOMER_ID=%q\n" "$CUSTOMER_ID"
@@ -76,7 +81,7 @@ set +e
 out="$(bash -c '
   die(){ echo "ERROR: $*" >&2; exit 1; }
   log(){ :; }
-  '"$(sed -n "/^DEFAULT_HANDOFF_PATH=/,/^}/p" "${SCRIPT}")"'
+  '"${LOADER}"'
   FROM_HANDOFF_PATH="'"${HANDOFF}.exp"'"
   load_pass_b_handoff
 ' 2>&1)"
@@ -85,5 +90,32 @@ set -e
 [[ $rc -ne 0 ]] || die "expected expiry failure"
 echo "$out" | grep -qi expired || die "missing expiry message: $out"
 pass "rejects expired handoff"
+
+# Token URL shape (customer path constructs this; no network)
+url="$(bash -c '
+  die(){ echo "ERROR: $*" >&2; exit 1; }
+  log(){ :; }
+  '"${LOADER}"'
+  AXELSPIRE_CI_ACCOUNT_ID=033113129683
+  AXELSPIRE_CI_REGION=eu-west-1
+  pass_b_handoff_url_for_token a1b2c3d4e5f60718293a4b5c6d7e8f90
+')"
+[[ "${url}" == "https://3am-ci-pass-b-handoff-033113129683.s3.eu-west-1.amazonaws.com/handoff/a1b2c3d4e5f60718293a4b5c6d7e8f90.json" ]] \
+  || die "unexpected URL: ${url}"
+pass "builds capability URL from 32-hex token"
+
+# Reject bad token length
+set +e
+out="$(bash -c '
+  die(){ echo "ERROR: $*" >&2; exit 1; }
+  log(){ :; }
+  '"${LOADER}"'
+  fetch_pass_b_handoff_token short
+' 2>&1)"
+rc=$?
+set -e
+[[ $rc -ne 0 ]] || die "expected bad-token failure"
+echo "$out" | grep -qi "32 hex" || die "missing token-length message: $out"
+pass "rejects non-32-hex token"
 
 echo "ALL PASS"
