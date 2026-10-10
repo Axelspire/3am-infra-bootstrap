@@ -405,9 +405,17 @@ leaf (see `CUSTOMER-ONBOARDING-OPS.md` §6).
 
 ### Pass B — Phase 5 bootstrap (after the CI CMK exists)
 
-Re-run **full** `apply` (or `--skip-org` when Phase 0 already succeeded)
-with `--axelspire-artifact-kms-key-arn` set to the key-ID ARN from pass A
-step c:
+**Preferred (DEPLOY-33):** use the 32-hex handoff token from the READY
+CUSTOMER-PACK (script downloads locked identity + KMS ARN):
+
+```bash
+./customer-org-setup.sh apply --skip-org --from-handoff <32-hex-token>
+./customer-org-setup.sh outputs-json > "$HOME/3am-org-setup-outputs.json"
+```
+
+**Manual fallback:** re-run **full** `apply` (or `--skip-org` when Phase 0
+already succeeded) with `--axelspire-artifact-kms-key-arn` set to the
+key-ID ARN from pass A step c:
 
 ```bash
 ./customer-org-setup.sh apply \
@@ -533,16 +541,17 @@ Repo secret `BOOTSTRAP_GIST_TOKEN` must be a **classic PAT for user
 `3am-gists`** with the `gist` scope. Actions' default `GITHUB_TOKEN`
 cannot manage gists.
 
-### 11.6 Pass B handoff (`--from-handoff`, DEPLOY-33)
+### 11.6 Pass B handoff (`--from-handoff TOKEN`, DEPLOY-33)
 
 After Pass A, AxelSpire publishes a short-lived handoff JSON to the
-dedicated CI bucket `3am-ci-pass-b-handoff-<account>` (capability URL:
-`handoff/<128-bit>.json`, S3 lifecycle ~48h). The customer downloads it
-to the fixed path `$HOME/3am-pass-b-handoff.json` and runs:
+dedicated CI bucket `3am-ci-pass-b-handoff-<account>` under
+`handoff/<32-hex>.json` (S3 lifecycle ~48h) and puts the **32-hex token**
+in CUSTOMER-PACK. The customer passes only that token — the script
+downloads to `$HOME/3am-pass-b-handoff.json` and loads locked identity:
 
 ```bash
-./customer-org-setup.sh apply --skip-org --from-handoff
-# or: ./single-account-setup.sh apply --skip-org --from-handoff
+./customer-org-setup.sh apply --skip-org --from-handoff <32-hex-token>
+# or: ./single-account-setup.sh apply --skip-org --from-handoff <32-hex-token>
 ```
 
 The handoff file is authoritative for identity + CI KMS ARN. Conflicting
