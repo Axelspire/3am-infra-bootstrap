@@ -1209,9 +1209,15 @@ omits `sts:TagSession`. The deploy chain in
          }
        },
        {
-         "Sid": "ReadCustomerExternalId",
+         "Sid": "ManageCustomerExternalId",
          "Effect": "Allow",
-         "Action": "secretsmanager:GetSecretValue",
+         "Action": [
+           "secretsmanager:GetSecretValue",
+           "secretsmanager:DescribeSecret",
+           "secretsmanager:CreateSecret",
+           "secretsmanager:PutSecretValue",
+           "secretsmanager:TagResource"
+         ],
          "Resource": "arn:aws:secretsmanager:*:033113129683:secret:/3am/license/external-id/*"
        },
        {
@@ -1284,7 +1290,7 @@ aws iam get-role-policy \
   --query 'PolicyDocument.Statement[].Sid'
 # expect: ["AssumeCustomerDeploymentRole","TagCustomerDeploymentSession",
 #          "ReadWriteCustomerState","LockCustomerState","UseAxelspireCiKeys",
-#          "ReadCustomerExternalId","ReadEnvDnsZoneSsm",
+#          "ManageCustomerExternalId","ReadEnvDnsZoneSsm",
 #          "DelegateCustomerSubzones","WritePendingApprovalHashes",
 #          "SignAuditReceipts","ReadAuditReceiptSigningKeyArn"]
 ```
