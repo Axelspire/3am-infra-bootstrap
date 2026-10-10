@@ -23,7 +23,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.29"
+BOOTSTRAP_VERSION="0.2.30"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-10-10"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
@@ -146,6 +146,82 @@ EXTERNAL_ID_SECRET_ARN=""
 STATE_BUCKET_NAME=""
 AXELSPIRE_ARTIFACT_KMS_KEY_ARN=""
 AXELSPIRE_ARTIFACT_S3_BUCKET_ARN=""
+
+# ---------------------------------------------------------------------------
+# Pass B handoff (DEPLOY-33) — locked identity from capability-URL JSON
+# ---------------------------------------------------------------------------
+DEFAULT_HANDOFF_PATH="${HOME}/3am-pass-b-handoff.json"
+FROM_HANDOFF=false
+FROM_HANDOFF_PATH=""
+CLI_SET_CUSTOMER_NAME=false
+CLI_SET_CUSTOMER_ID=false
+CLI_SET_ACCOUNT_EMAIL=false
+CLI_SET_PLATFORM_ADMIN=false
+CLI_SET_BREAKGLASS=false
+CLI_SET_ALLOWED_REGIONS=false
+CLI_SET_DEPLOYMENT_REGION=false
+CLI_SET_AXELSPIRE_KMS=false
+CLI_SET_AXELSPIRE_S3=false
+CLI_SET_AXELSPIRE_CI_ACCT=false
+
+load_pass_b_handoff () {
+  local path="${FROM_HANDOFF_PATH:-${DEFAULT_HANDOFF_PATH}}"
+  [ -f "${path}" ] || die "--from-handoff: file not found: ${path} (download the capability URL to ${DEFAULT_HANDOFF_PATH})"
+  command -v jq >/dev/null 2>&1 || die "--from-handoff requires jq"
+  jq -e . "${path}" >/dev/null 2>&1 || die "--from-handoff: invalid JSON in ${path}"
+
+  local purpose expires
+  purpose=$(jq -r '.purpose // empty' "${path}")
+  [ "${purpose}" = "pass-b-handoff" ] || die "--from-handoff: ${path} is not a Pass B handoff file (purpose=${purpose:-empty})"
+
+  expires=$(jq -r '.expires_at // empty' "${path}")
+  if [ -n "${expires}" ] && command -v python3 >/dev/null 2>&1; then
+    local now
+    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    if ! python3 -c 'import sys; from datetime import datetime, timezone; exp=datetime.fromisoformat(sys.argv[1].replace("Z","+00:00")); raise SystemExit(0 if datetime.now(timezone.utc)<=exp else 1)' "${expires}"; then
+      die "--from-handoff: handoff expired at ${expires} (now ${now}). Ask AxelSpire to re-publish (customer-pack-publish-handoff.sh)."
+    fi
+  fi
+
+  local conflicts=""
+  ${CLI_SET_CUSTOMER_NAME} && conflicts="${conflicts} --customer-name"
+  ${CLI_SET_CUSTOMER_ID} && conflicts="${conflicts} --customer-id"
+  ${CLI_SET_ACCOUNT_EMAIL} && conflicts="${conflicts} --account-email"
+  ${CLI_SET_PLATFORM_ADMIN} && conflicts="${conflicts} --platform-admin-user"
+  ${CLI_SET_BREAKGLASS} && conflicts="${conflicts} --breakglass-user"
+  ${CLI_SET_ALLOWED_REGIONS} && conflicts="${conflicts} --allowed-regions"
+  ${CLI_SET_DEPLOYMENT_REGION} && conflicts="${conflicts} --deployment-region"
+  ${CLI_SET_AXELSPIRE_KMS} && conflicts="${conflicts} --axelspire-artifact-kms-key-arn"
+  ${CLI_SET_AXELSPIRE_S3} && conflicts="${conflicts} --axelspire-artifact-s3-bucket-arn"
+  ${CLI_SET_AXELSPIRE_CI_ACCT} && conflicts="${conflicts} --axelspire-ci-account-id"
+  [ -z "${conflicts}" ] || die "--from-handoff: do not pass locked flags:${conflicts}. Values are fixed in ${path}."
+
+  CUSTOMER_NAME=$(jq -r '.customer_name // empty' "${path}")
+  CUSTOMER_ID=$(jq -r '.customer_id // empty' "${path}")
+  ACCOUNT_EMAIL=$(jq -r '.account_email // empty' "${path}")
+  PLATFORM_ADMIN_USER=$(jq -r '.platform_admin_user // empty' "${path}")
+  BREAKGLASS_USER=$(jq -r '.breakglass_user // empty' "${path}")
+  ALLOWED_REGIONS_CSV=$(jq -r '.allowed_regions // empty' "${path}")
+  DEPLOYMENT_REGION=$(jq -r '.deployment_region // .region // empty' "${path}")
+  AXELSPIRE_ARTIFACT_KMS_KEY_ARN=$(jq -r '.axelspire_artifact_kms_key_arn // empty' "${path}")
+  AXELSPIRE_ARTIFACT_S3_BUCKET_ARN=$(jq -r '.axelspire_artifact_s3_bucket_arn // empty' "${path}")
+  local ci_acct
+  ci_acct=$(jq -r '.axelspire_ci_account_id // empty' "${path}")
+  [ -n "${ci_acct}" ] && AXELSPIRE_CI_ACCOUNT_ID="${ci_acct}"
+  ACCOUNT_ID=$(jq -r '.account_id // empty' "${path}")
+
+  [ -n "${CUSTOMER_NAME}" ] || die "--from-handoff: customer_name missing in ${path}"
+  [ -n "${CUSTOMER_ID}" ] || die "--from-handoff: customer_id missing in ${path}"
+  [ -n "${PLATFORM_ADMIN_USER}" ] || die "--from-handoff: platform_admin_user missing in ${path}"
+  [ -n "${BREAKGLASS_USER}" ] || die "--from-handoff: breakglass_user missing in ${path}"
+  [ -n "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" ] || die "--from-handoff: axelspire_artifact_kms_key_arn missing in ${path}"
+  [ -n "${DEPLOYMENT_REGION}" ] || die "--from-handoff: deployment_region missing in ${path}"
+  [ -n "${ALLOWED_REGIONS_CSV}" ] || ALLOWED_REGIONS_CSV="${DEPLOYMENT_REGION}"
+
+  SKIP_ORG=true
+  SKIP_BOOTSTRAP=false
+  log "loaded Pass B handoff from ${path} (customer_id=${CUSTOMER_ID}, expires_at=${expires:-n/a})"
+}
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -308,23 +384,32 @@ parse_args () {
   esac
   while [ $# -gt 0 ]; do
     case "$1" in
-      --customer-name)             CUSTOMER_NAME="$2"; shift 2 ;;
-      --customer-id)               CUSTOMER_ID="$2"; shift 2 ;;
-      --allowed-regions)           ALLOWED_REGIONS_CSV="$2"; shift 2 ;;
-      --deployment-region)         DEPLOYMENT_REGION="$2"; shift 2 ;;
-      --platform-admin-user)       PLATFORM_ADMIN_USER="$2"; shift 2 ;;
-      --breakglass-user)           BREAKGLASS_USER="$2"; shift 2 ;;
+      --customer-name)             CUSTOMER_NAME="$2"; CLI_SET_CUSTOMER_NAME=true; shift 2 ;;
+      --customer-id)               CUSTOMER_ID="$2"; CLI_SET_CUSTOMER_ID=true; shift 2 ;;
+      --allowed-regions)           ALLOWED_REGIONS_CSV="$2"; CLI_SET_ALLOWED_REGIONS=true; shift 2 ;;
+      --deployment-region)         DEPLOYMENT_REGION="$2"; CLI_SET_DEPLOYMENT_REGION=true; shift 2 ;;
+      --platform-admin-user)       PLATFORM_ADMIN_USER="$2"; CLI_SET_PLATFORM_ADMIN=true; shift 2 ;;
+      --breakglass-user)           BREAKGLASS_USER="$2"; CLI_SET_BREAKGLASS=true; shift 2 ;;
       --platform-admins-group)     PLATFORM_ADMINS_GROUP="$2"; shift 2 ;;
       --breakglass-group)          BREAKGLASS_GROUP="$2"; shift 2 ;;
       --external-idp)              EXTERNAL_IDP=true; shift ;;
       --skip-scps)                 SKIP_SCPS=true; shift ;;
       --skip-bootstrap)            SKIP_BOOTSTRAP=true; shift ;;
       --skip-org)                  SKIP_ORG=true; shift ;;
-      --axelspire-ci-account-id)   AXELSPIRE_CI_ACCOUNT_ID="$2"; shift 2 ;;
+      --from-handoff)
+        FROM_HANDOFF=true
+        if [ -n "${2:-}" ] && [ "${2#-}" = "$2" ]; then
+          FROM_HANDOFF_PATH="$2"; shift 2
+        else
+          FROM_HANDOFF_PATH="${DEFAULT_HANDOFF_PATH}"; shift
+        fi
+        ;;
+
+      --axelspire-ci-account-id)   AXELSPIRE_CI_ACCOUNT_ID="$2"; CLI_SET_AXELSPIRE_CI_ACCT=true; shift 2 ;;
       --axelspire-ci-region)       AXELSPIRE_CI_REGION="$2"; shift 2 ;;
       --axelspire-ci-role-name)    AXELSPIRE_CI_ROLE_NAME="$2"; shift 2 ;;
-      --axelspire-artifact-kms-key-arn)    AXELSPIRE_ARTIFACT_KMS_KEY_ARN="$2"; shift 2 ;;
-      --axelspire-artifact-s3-bucket-arn)  AXELSPIRE_ARTIFACT_S3_BUCKET_ARN="$2"; shift 2 ;;
+      --axelspire-artifact-kms-key-arn)    AXELSPIRE_ARTIFACT_KMS_KEY_ARN="$2"; CLI_SET_AXELSPIRE_KMS=true; shift 2 ;;
+      --axelspire-artifact-s3-bucket-arn)  AXELSPIRE_ARTIFACT_S3_BUCKET_ARN="$2"; CLI_SET_AXELSPIRE_S3=true; shift 2 ;;
       --external-id-secret-name)   EXTERNAL_ID_SECRET_NAME="$2"; shift 2 ;;
       --no-license-session-tag)    REQUIRE_LICENSE_SESSION_TAG=false; shift ;;
       --kms-multi-region)          KMS_MULTI_REGION=true; shift ;;
@@ -2115,6 +2200,7 @@ main () {
     die "bootstrap-self-update.inc.sh did not load (local ${BOOTSTRAP_VERSION}). Refusing to parse flags on a possibly stale copy — re-clone https://github.com/Axelspire/3am-infra-bootstrap or ensure curl can reach raw.githubusercontent.com, then re-run."
   fi
   parse_args "$@"
+  if ${FROM_HANDOFF}; then load_pass_b_handoff; fi
   case "${COMMAND}" in
     help|--help|-h) usage; exit 0 ;;
   esac

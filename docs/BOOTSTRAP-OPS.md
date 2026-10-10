@@ -532,3 +532,19 @@ not the expected owner). Workflow: `sync-bootstrap-gists` (push to
 Repo secret `BOOTSTRAP_GIST_TOKEN` must be a **classic PAT for user
 `3am-gists`** with the `gist` scope. Actions' default `GITHUB_TOKEN`
 cannot manage gists.
+
+### 11.6 Pass B handoff (`--from-handoff`, DEPLOY-33)
+
+After Pass A, AxelSpire publishes a short-lived handoff JSON to the
+dedicated CI bucket `3am-ci-pass-b-handoff-<account>` (capability URL:
+`handoff/<128-bit>.json`, S3 lifecycle ~48h). The customer downloads it
+to the fixed path `$HOME/3am-pass-b-handoff.json` and runs:
+
+```bash
+./customer-org-setup.sh apply --skip-org --from-handoff
+# or: ./single-account-setup.sh apply --skip-org --from-handoff
+```
+
+The handoff file is authoritative for identity + CI KMS ARN. Conflicting
+CLI flags are rejected. See `3am-deployments` `customer-pack-publish-handoff.sh`
+and CUSTOMER-PACK.md.
