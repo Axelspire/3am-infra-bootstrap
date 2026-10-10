@@ -98,13 +98,15 @@ The script decouples these:
   selects the **IDC / Organizations** region. Set it to the IDC home
   region; if IDC is enabled elsewhere, preflight fails with a clear
   message telling you which region to re-run from.
-- `--deployment-region <region>` selects the **workload** region. It
-  defaults to `AWS_REGION` (single-region orgs need not pass it). It
-  must appear in `--allowed-regions`. The KMS ARN passed via
-  `--axelspire-artifact-kms-key-arn` must be the same-region MRK leaf;
-  preflight enforces the region match. On apply, Phase 5 writes that
-  exact ARN into `/3am/axelspire/artifact-kms-key-arn` and state SSE
-  config, but for **MRK** keys the `ThreeAM-Deployment` /
+- `--deployment-region <region>` selects the **single primary workload**
+  region. **Always pass it on Pass A** (even when it equals IdC home).
+  If omitted it defaults to `AWS_REGION` / CloudShell and the script
+  warns — it does **not** mean “deploy to every `--allowed-regions`
+  entry”. It must appear in `--allowed-regions` (SCP allow-list only).
+  The KMS ARN passed via `--axelspire-artifact-kms-key-arn` must be the
+  same-region MRK leaf; preflight enforces the region match. On apply,
+  Phase 5 writes that exact ARN into `/3am/axelspire/artifact-kms-key-arn`
+  and state SSE config, but for **MRK** keys the `ThreeAM-Deployment` /
   `ThreeAM-DriftReader` identity policies use
   `arn:<partition>:kms:*:<ci-acct>:key/mrk-…` so an add-region re-run
   does not drop prior regions (BOOTSTRAP-1 / 0.2.26+).
@@ -135,8 +137,8 @@ later `outputs-json` in a fresh shell can recover them — including on
 **Pass A** (`--skip-bootstrap`, script **≥ 0.2.32**). Older Pass A runs
 left those SSM keys empty; re-export with the identity flags or re-apply
 Pass A on 0.2.32+.
-| `--allowed-regions` | Intake §3 primary region + any pre-approved secondaries |
-| `--deployment-region` *(optional)* | Intake §3 primary deployment region — pass only when it differs from the IDC home region the script's `AWS_REGION` points at |
+| `--allowed-regions` | Intake §3 primary region + any pre-approved secondaries (SCP allow-list only — does **not** deploy every listed region) |
+| `--deployment-region` | Intake §3 primary deployment region — **always pass** on Pass A (even when it equals IdC home / `AWS_REGION`). Without it the script defaults to CloudShell region and warns. |
 
 The CI CMK ARN is **not** an intake-form input — it comes from AxelSpire
 out-of-band, *after* the customer-onboard PR has merged and
@@ -197,8 +199,9 @@ Standard apply, customer-Org-management context:
   --account-email aws-3am@acme.example.com \
   --platform-admin-user alice@acme.example.com \
   --breakglass-user bob@acme.example.com \
+  --deployment-region eu-west-1 \
   --allowed-regions eu-west-1,us-east-1 \
-  --axelspire-artifact-kms-key-arn arn:aws:kms:us-east-1:033113129683:key/<uuid>
+  --axelspire-artifact-kms-key-arn arn:aws:kms:eu-west-1:033113129683:key/<uuid>
 ```
 
 The `--axelspire-artifact-kms-key-arn` value comes from AxelSpire (the
@@ -237,8 +240,9 @@ Org-management account):
   --customer-id acme-corp \
   --platform-admin-user alice@acme.example.com \
   --breakglass-user bob@acme.example.com \
+  --deployment-region eu-west-1 \
   --allowed-regions eu-west-1,us-east-1 \
-  --axelspire-artifact-kms-key-arn arn:aws:kms:us-east-1:033113129683:key/<uuid>
+  --axelspire-artifact-kms-key-arn arn:aws:kms:eu-west-1:033113129683:key/<uuid>
 ```
 
 The `--axelspire-artifact-kms-key-arn` value comes from AxelSpire (the

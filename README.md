@@ -109,6 +109,7 @@ chmod +x customer-org-setup.sh
   --account-email aws-3am@acme.example.com \
   --platform-admin-user alice@acme.example.com \
   --breakglass-user bob@acme.example.com \
+  --deployment-region "eu-west-1" \
   --allowed-regions "eu-west-1,us-east-1"
 # Prefer pinning the workload id for outputs (avoids name collisions):
 ./customer-org-setup.sh outputs-json --aws-account-id <workload-12-digit> > org-setup.json
@@ -123,6 +124,7 @@ chmod +x single-account-setup.sh
 ./single-account-setup.sh apply \
   --breakglass-user bob@acme.example.com \
   --aws-account-id <caller-12-digit> \
+  --deployment-region "eu-west-1" \
   --allowed-regions "eu-west-1,us-east-1"
 ./single-account-setup.sh outputs-json > org-setup.json
 ```
@@ -134,14 +136,21 @@ the update, replaces the local copy (or `$HOME/<script-name>` when invoked via
 Use `--skip-self-update` or `SKIP_SELF_UPDATE=1` to disable. Override the
 source with `BOOTSTRAP_GIT_REF` (default `main`).
 
+`--deployment-region` is the **single primary workload region** (state
+bucket, lock table, customer CMK, external-ID secret). Always pass it
+on Pass A. Without the flag the script defaults to CloudShell /
+`AWS_REGION` and prints a warning — it does **not** deploy into every
+`--allowed-regions` entry.
+
 `--allowed-regions` (CSV, default `eu-west-1,us-east-1`) is the
-parameter for the `3am-region-deny` SCP. Anything not in the list is
-denied for non-global services; IAM, Organizations, Route 53,
-CloudFront, WAF, STS, KMS, S3 account-level reads, Health, Tag and
-Global Accelerator are always exempt because they're global or
-control-plane services. Include at minimum your primary workload
-region and `us-east-1` (CloudFront, ACM-for-CloudFront and several
-global services have hidden `us-east-1` API hops).
+parameter for the `3am-region-deny` SCP only (allow-list, not a deploy
+matrix). Anything not in the list is denied for non-global services;
+IAM, Organizations, Route 53, CloudFront, WAF, STS, KMS, S3
+account-level reads, Health, Tag and Global Accelerator are always
+exempt because they're global or control-plane services. Include at
+minimum your primary workload region and `us-east-1` (CloudFront,
+ACM-for-CloudFront and several global services have hidden `us-east-1`
+API hops).
 
 Re-running either script with a different `--allowed-regions` value
 calls `organizations:UpdatePolicy` on the existing SCP, so the policy
