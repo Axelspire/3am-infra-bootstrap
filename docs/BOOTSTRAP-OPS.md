@@ -513,19 +513,22 @@ After editing either script, run:
 
 ### 11.5 Public gist mirrors
 
-The two customer scripts are also published as public GitHub gists so
-operators can hand out short gist URLs:
+The two customer scripts are published as public GitHub gists owned by
+the bot user **`3am-gists`** (GitHub organisations cannot own gists).
+Source of truth remains this repo; CloudShell can also
+`curl` raw paths under
+`https://raw.githubusercontent.com/Axelspire/3am-infra-bootstrap/main/_scripts/`.
 
 | Script | Public gist |
 | --- | --- |
-| `single-account-setup.sh` | https://gist.github.com/dancvrcek/505ee12d11144175f64c2c837b68ef30 |
-| `customer-org-setup.sh` | https://gist.github.com/dancvrcek/74753b073e9b3e83fa8f6c6f40599c19 |
+| `single-account-setup.sh` | https://gist.github.com/3am-gists/ — see `.github/gist-manifest.json` |
+| `customer-org-setup.sh` | https://gist.github.com/3am-gists/ — see `.github/gist-manifest.json` |
 
-Manifest: `.github/gist-manifest.json`. Sync script:
-`_scripts/sync-bootstrap-gists.sh`. Workflow:
-`sync-bootstrap-gists` (runs on push to `main` when those scripts
-change, or via `workflow_dispatch`).
+Manifest: `.github/gist-manifest.json` (`owner` must be `3am-gists`).
+Sync script: `_scripts/sync-bootstrap-gists.sh` (refuses tokens that are
+not the expected owner). Workflow: `sync-bootstrap-gists` (push to
+`main` when those scripts change, or `workflow_dispatch`).
 
-Repo secret `BOOTSTRAP_GIST_TOKEN` (classic PAT with `gist` + enough
-`repo` to push if needed) must stay set so the workflow can update
-these gists. Actions' default `GITHUB_TOKEN` cannot manage gists.
+Repo secret `BOOTSTRAP_GIST_TOKEN` must be a **classic PAT for user
+`3am-gists`** with the `gist` scope. Actions' default `GITHUB_TOKEN`
+cannot manage gists.

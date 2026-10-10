@@ -3,8 +3,12 @@
 # Proprietary. Unauthorized use prohibited. support3am@axelspire.com
 
 # Create or update public GitHub gists for the two customer bootstrap scripts.
-# Requires a token with the `gist` scope in GITHUB_TOKEN / GH_TOKEN
-# (GITHUB_TOKEN from Actions cannot manage gists — use a classic PAT secret).
+# Gists must be owned by the bot user in .github/gist-manifest.json "owner"
+# (default: 3am-gists). GitHub orgs cannot own gists.
+#
+# Requires a classic PAT for that bot user with the `gist` scope in
+# GH_TOKEN / GITHUB_TOKEN (Actions: repo secret BOOTSTRAP_GIST_TOKEN).
+# The default Actions GITHUB_TOKEN cannot manage gists.
 #
 # Usage (from repo root):
 #   ./_scripts/sync-bootstrap-gists.sh
@@ -19,7 +23,7 @@ DRY_RUN=0
 PUBLIC=1
 
 usage () {
-  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -36,25 +40,38 @@ command -v gh >/dev/null 2>&1 || { echo "error: gh CLI required" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "error: jq required" >&2; exit 1; }
 [[ -f "${MANIFEST}" ]] || { echo "error: missing ${MANIFEST}" >&2; exit 1; }
 
+EXPECTED_OWNER="$(jq -r '.owner // "3am-gists"' "${MANIFEST}")"
+
 TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 if [[ -z "${TOKEN}" && "${DRY_RUN}" -eq 0 ]]; then
-  echo "error: GH_TOKEN or GITHUB_TOKEN required (gist scope)" >&2
+  echo "error: GH_TOKEN or GITHUB_TOKEN required (gist scope, user ${EXPECTED_OWNER})" >&2
   exit 1
 fi
 [[ -n "${TOKEN}" ]] && export GH_TOKEN="${TOKEN}"
 
+if [[ "${DRY_RUN}" -eq 0 ]]; then
+  token_user="$(gh api user -q .login)"
+  if [[ "${token_user}" != "${EXPECTED_OWNER}" ]]; then
+    echo "error: BOOTSTRAP_GIST_TOKEN / GH_TOKEN authenticates as '${token_user}', expected '${EXPECTED_OWNER}'" >&2
+    echo "Create gists under the ${EXPECTED_OWNER} bot user (GitHub orgs cannot own gists)." >&2
+    exit 1
+  fi
+  echo "Authenticated as ${token_user} (gist owner)"
+fi
+
 manifest_changed=0
 tmp="$(mktemp)"
-cp "${MANIFEST}" "${tmp}"
+# Drop the top-level owner key from the working copy of per-script entries.
+jq 'del(.owner)' "${MANIFEST}" > "${tmp}"
 trap 'rm -f "${tmp}" "${tmp}.new"' EXIT
 
-keys="$(jq -r 'keys[]' "${MANIFEST}")"
+keys="$(jq -r 'keys[]' "${tmp}")"
 while IFS= read -r key; do
   [[ -n "${key}" ]] || continue
-  source_rel="$(jq -r --arg k "${key}" '.[$k].source' "${MANIFEST}")"
-  filename="$(jq -r --arg k "${key}" '.[$k].filename' "${MANIFEST}")"
-  description="$(jq -r --arg k "${key}" '.[$k].description' "${MANIFEST}")"
-  gist_id="$(jq -r --arg k "${key}" '.[$k].gist_id // ""' "${MANIFEST}")"
+  source_rel="$(jq -r --arg k "${key}" '.[$k].source' "${tmp}")"
+  filename="$(jq -r --arg k "${key}" '.[$k].filename' "${tmp}")"
+  description="$(jq -r --arg k "${key}" '.[$k].description' "${tmp}")"
+  gist_id="$(jq -r --arg k "${key}" '.[$k].gist_id // ""' "${tmp}")"
   source_path="${REPO_ROOT}/${source_rel}"
   [[ -f "${source_path}" ]] || { echo "error: missing source ${source_path}" >&2; exit 1; }
 
@@ -107,6 +124,6 @@ while IFS= read -r key; do
 done <<< "${keys}"
 
 if [[ "${manifest_changed}" -eq 1 && "${DRY_RUN}" -eq 0 ]]; then
-  cp "${tmp}" "${MANIFEST}"
-  echo "Wrote new gist ids to ${MANIFEST}"
+  jq --arg owner "${EXPECTED_OWNER}" '{owner: $owner} + .' "${tmp}" > "${MANIFEST}"
+  echo "Wrote new gist ids to ${MANIFEST} (owner=${EXPECTED_OWNER})"
 fi
