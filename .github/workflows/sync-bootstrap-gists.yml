@@ -31,15 +31,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          # Need a token that can push gist-id commits back to main.
-          token: ${{ secrets.BOOTSTRAP_GIST_TOKEN }}
+        # Default GITHUB_TOKEN is enough for checkout + committing gist ids.
+        # BOOTSTRAP_GIST_TOKEN is only needed for the gist API.
       - name: Require BOOTSTRAP_GIST_TOKEN
         env:
           BOOTSTRAP_GIST_TOKEN: ${{ secrets.BOOTSTRAP_GIST_TOKEN }}
         run: |
           if [[ -z "${BOOTSTRAP_GIST_TOKEN}" ]]; then
             echo "::error::Set repo secret BOOTSTRAP_GIST_TOKEN (classic PAT with gist scope)."
+            echo "Then re-run this workflow via workflow_dispatch."
             exit 1
           fi
       - name: Sync gists
@@ -47,8 +47,8 @@ jobs:
           GH_TOKEN: ${{ secrets.BOOTSTRAP_GIST_TOKEN }}
         run: ./_scripts/sync-bootstrap-gists.sh
       - name: Commit gist-manifest.json if ids were created
-        env:
-          GH_TOKEN: ${{ secrets.BOOTSTRAP_GIST_TOKEN }}
+        # GITHUB_TOKEN (contents:write) can push the id commit; gist PAT
+        # does not need the repo scope.
         run: |
           set -euo pipefail
           if git diff --quiet -- .github/gist-manifest.json; then
