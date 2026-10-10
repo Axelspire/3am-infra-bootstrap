@@ -23,7 +23,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.34"
+BOOTSTRAP_VERSION="0.2.35"
 BOOTSTRAP_VARIANT="single-account"
 SCRIPT_LAST_UPDATED="2026-10-10"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
@@ -325,16 +325,14 @@ Optional:
                                 --auto-approve, required.
   --allowed-regions LIST        CSV, default: "eu-west-1,us-east-1".
                                 Used to parameterise the region-deny SCP.
-  --deployment-region REGION    Customer workload region: where the state
-                                bucket, DynamoDB lock table, customer CMK
-                                and external-ID secret live, and which
-                                the --axelspire-artifact-kms-key-arn must
-                                match. Default: the shell's AWS_REGION
-                                (which also drives Identity Center calls).
-                                Set this explicitly when the IAM Identity
-                                Center home region differs from the
-                                customer's deployment region (IDC is
-                                one-per-org). Must be in --allowed-regions.
+  --deployment-region REGION    Customer primary workload region: where
+                                the state bucket, DynamoDB lock table,
+                                customer CMK and external-ID secret live,
+                                and which --axelspire-artifact-kms-key-arn
+                                must match. Always pass this on Pass A.
+                                Default (legacy): shell AWS_REGION /
+                                CloudShell — NOT every --allowed-regions
+                                entry. Must be in --allowed-regions.
   --platform-admins-group NAME  Default: "3AM-Platform-Admins".
   --breakglass-group NAME       Default: "3AM-BreakGlass".
   --external-idp                Skip user/group creation; expect them to
@@ -498,10 +496,15 @@ preflight () {
   # DEPLOYMENT_REGION drives the customer workload: state bucket, lock
   # table, customer CMK, external-ID secret, kms:ViaService in the CMK
   # policy, and the region match for --axelspire-artifact-kms-key-arn.
-  # Defaults to EFFECTIVE_REGION; set --deployment-region explicitly when
-  # the IDC home region differs from where the customer should deploy.
+  # Always prefer an explicit --deployment-region. Defaults to
+  # EFFECTIVE_REGION only when the flag is omitted (legacy / single-region).
+  # --allowed-regions is the SCP allow-list only — it does NOT create
+  # workload resources in every listed region.
   if [ -z "${DEPLOYMENT_REGION}" ]; then
     DEPLOYMENT_REGION="${EFFECTIVE_REGION}"
+    if ! ${CLI_SET_DEPLOYMENT_REGION}; then
+      warn "deployment region defaulted to '${DEPLOYMENT_REGION}' from AWS_REGION / CloudShell — pass --deployment-region <primary> explicitly. --allowed-regions (${ALLOWED_REGIONS_CSV}) is SCP allow-list only; it does not deploy to every listed region."
+    fi
   fi
   [ "${DEPLOYMENT_REGION}" != "<unset>" ] && [ -n "${DEPLOYMENT_REGION}" ] \
     || die "deployment region is unset: pass --deployment-region or export AWS_REGION"
