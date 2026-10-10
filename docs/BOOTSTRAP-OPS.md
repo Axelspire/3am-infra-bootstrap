@@ -514,14 +514,18 @@ After editing either script, run:
 ### 11.5 Public gist mirrors
 
 The two customer scripts are also published as public GitHub gists so
-operators can hand out short gist URLs. Manifest:
-`.github/gist-manifest.json`. Sync script:
+operators can hand out short gist URLs:
+
+| Script | Public gist |
+| --- | --- |
+| `single-account-setup.sh` | https://gist.github.com/dancvrcek/505ee12d11144175f64c2c837b68ef30 |
+| `customer-org-setup.sh` | https://gist.github.com/dancvrcek/74753b073e9b3e83fa8f6c6f40599c19 |
+
+Manifest: `.github/gist-manifest.json`. Sync script:
 `_scripts/sync-bootstrap-gists.sh`. Workflow:
 `sync-bootstrap-gists` (runs on push to `main` when those scripts
 change, or via `workflow_dispatch`).
 
-**One-time setup:** add repo secret `BOOTSTRAP_GIST_TOKEN` = classic
-PAT with the `gist` scope. Actions' default `GITHUB_TOKEN` cannot
-manage gists. After the secret is set, run **sync-bootstrap-gists**
-once via workflow_dispatch — that creates both gists and commits their
-ids into the manifest. Later script pushes update the same gists.
+Repo secret `BOOTSTRAP_GIST_TOKEN` (classic PAT with `gist` + enough
+`repo` to push if needed) must stay set so the workflow can update
+these gists. Actions' default `GITHUB_TOKEN` cannot manage gists.
