@@ -1,0 +1,63 @@
+# Copyright (c) 2026 Axelspire Inc. All rights reserved.
+# Proprietary. Unauthorized use prohibited. support3am@axelspire.com
+
+name: sync-bootstrap-gists
+
+# Keeps public gists of the two customer bootstrap scripts in sync with
+# _scripts/*. Requires repo secret BOOTSTRAP_GIST_TOKEN — a classic PAT
+# (or fine-grained token) with the `gist` scope. The default GITHUB_TOKEN
+# cannot create/update gists.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '_scripts/single-account-setup.sh'
+      - '_scripts/customer-org-setup.sh'
+      - '_scripts/sync-bootstrap-gists.sh'
+      - '.github/gist-manifest.json'
+      - '.github/workflows/sync-bootstrap-gists.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-bootstrap-gists
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need a token that can push gist-id commits back to main.
+          token: ${{ secrets.BOOTSTRAP_GIST_TOKEN }}
+      - name: Require BOOTSTRAP_GIST_TOKEN
+        env:
+          BOOTSTRAP_GIST_TOKEN: ${{ secrets.BOOTSTRAP_GIST_TOKEN }}
+        run: |
+          if [[ -z "${BOOTSTRAP_GIST_TOKEN}" ]]; then
+            echo "::error::Set repo secret BOOTSTRAP_GIST_TOKEN (classic PAT with gist scope)."
+            exit 1
+          fi
+      - name: Sync gists
+        env:
+          GH_TOKEN: ${{ secrets.BOOTSTRAP_GIST_TOKEN }}
+        run: ./_scripts/sync-bootstrap-gists.sh
+      - name: Commit gist-manifest.json if ids were created
+        env:
+          GH_TOKEN: ${{ secrets.BOOTSTRAP_GIST_TOKEN }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- .github/gist-manifest.json; then
+            echo "No manifest changes"
+            exit 0
+          fi
+          git config user.name  "axelspire-platform-bot"
+          git config user.email "platform-bot@axelspire.com"
+          git add .github/gist-manifest.json
+          git commit -m "chore(gists): record bootstrap script gist ids"
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

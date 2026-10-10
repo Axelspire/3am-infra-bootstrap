@@ -1,0 +1,14 @@
+{
+  "single-account-setup.sh": {
+    "gist_id": "",
+    "filename": "single-account-setup.sh",
+    "description": "3AM single-account-setup.sh — auto-synced from Axelspire/3am-infra-bootstrap (_scripts/)",
+    "source": "_scripts/single-account-setup.sh"
+  },
+  "customer-org-setup.sh": {
+    "gist_id": "",
+    "filename": "customer-org-setup.sh",
+    "description": "3AM customer-org-setup.sh — auto-synced from Axelspire/3am-infra-bootstrap (_scripts/)",
+    "source": "_scripts/customer-org-setup.sh"
+  }
+}
