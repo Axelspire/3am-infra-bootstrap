@@ -14,7 +14,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.31"
+BOOTSTRAP_VERSION="0.2.32"
 BOOTSTRAP_VARIANT="multi-account"
 SCRIPT_LAST_UPDATED="2026-10-10"
 BOOTSTRAP_SCRIPT_NAME="customer-org-setup.sh"
@@ -2005,6 +2005,10 @@ do_apply () {
 
   if ${SKIP_BOOTSTRAP}; then
     log "== Phase 5 skipped (--skip-bootstrap) =="
+    # Pass A must still persist IdC identity emails so a later outputs-json
+    # (and AxelSpire Pass B handoff) can recover them. Full Phase 5 also
+    # writes these via phase5_put_ssm_params.
+    phase0_persist_identity_ssm
   else
     # Phase 5 — assumes ${ORG_ACCESS_ROLE_NAME} into the child account
     # and creates the cross-account role, customer CMK, state backend,
@@ -2015,10 +2019,45 @@ do_apply () {
     phase5_apply
   fi
 
+  if [ -z "${PLATFORM_ADMIN_USER}" ] || [ -z "${BREAKGLASS_USER}" ]; then
+    die "Pass A outputs missing platform_admin_user / breakglass_user — refuse to write incomplete JSON"
+  fi
   print_outputs_human
   print_outputs_json > "${LOG_DIR}/3am-org-setup-outputs.json"
   log "outputs JSON: ${LOG_DIR}/3am-org-setup-outputs.json"
   log "DONE."
+}
+
+# Persist Pass A identity into the child account SSM so outputs-json /
+# Pass B handoff can recover emails after --skip-bootstrap (Phase 5
+# never ran, so phase5_put_ssm_params did not write them).
+phase0_persist_identity_ssm () {
+  [ -n "${ACCOUNT_ID}" ] || die "phase0_persist_identity_ssm: ACCOUNT_ID unset"
+  [ -n "${PLATFORM_ADMIN_USER}" ] || die "phase0_persist_identity_ssm: PLATFORM_ADMIN_USER unset"
+  [ -n "${BREAKGLASS_USER}" ] || die "phase0_persist_identity_ssm: BREAKGLASS_USER unset"
+  log "== Pass A: persist identity emails to child SSM =="
+  assume_workload_creds "${ACCOUNT_ID}" "${ORG_ACCESS_ROLE_NAME}"
+  trap 'restore_mgmt_creds; echo; echo "FAILED at line ${LINENO} (exit $?). Log: ${LOG_FILE:-<n/a>}" >&2' ERR
+  # Prefer deployment region for SSM (same as Phase 5 / resolve_outputs).
+  if [ -n "${DEPLOYMENT_REGION}" ] && [ "${DEPLOYMENT_REGION}" != "<unset>" ]; then
+    export AWS_REGION="${DEPLOYMENT_REGION}"
+  fi
+  local _put
+  _put () {
+    local name=$1 desc=$2 value=$3
+    [ -n "${value}" ] || return 0
+    aws ssm put-parameter --name "${name}" --description "${desc}" \
+      --type String --overwrite --value "${value}" >/dev/null
+  }
+  _put /3am/bootstrap/platform-admin-user "IdC platform-admin user email (Pass A)." "${PLATFORM_ADMIN_USER}"
+  _put /3am/bootstrap/breakglass-user     "IdC break-glass user email (Pass A)." "${BREAKGLASS_USER}"
+  _put /3am/bootstrap/account-email       "Org account root email (multi-account Pass A)." "${ACCOUNT_EMAIL}"
+  _put /3am/bootstrap/version             "Bootstrap version of last Pass A / apply." "${BOOTSTRAP_VERSION}"
+  _put /3am/bootstrap/variant             "Bootstrap variant." "${BOOTSTRAP_VARIANT}"
+  _put /3am/bootstrap/script              "Bootstrap script filename." "${BOOTSTRAP_SCRIPT_NAME}"
+  restore_mgmt_creds
+  trap 'echo; echo "FAILED at line ${LINENO} (exit $?). Log: ${LOG_FILE:-<n/a>}" >&2' ERR
+  log "Pass A identity persisted under /3am/bootstrap/* in ${ACCOUNT_ID}"
 }
 
 # ---------------------------------------------------------------------------
@@ -2413,6 +2452,12 @@ do_outputs () {
 
 do_outputs_json () {
   resolve_outputs
+  if [ -z "${PLATFORM_ADMIN_USER}" ] || [ -z "${BREAKGLASS_USER}" ]; then
+    die "outputs-json: platform_admin_user / breakglass_user empty (Pass A used --skip-bootstrap before 0.2.32, or SSM missing). Re-run with --platform-admin-user / --breakglass-user / --account-email, or re-apply Pass A with script >= 0.2.32."
+  fi
+  if [ "${BOOTSTRAP_VARIANT}" = "multi-account" ] && [ -z "${ACCOUNT_EMAIL}" ]; then
+    die "outputs-json: multi-account requires --account-email (or SSM /3am/bootstrap/account-email)"
+  fi
   print_outputs_json
 }
 

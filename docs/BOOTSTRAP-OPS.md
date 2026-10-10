@@ -130,8 +130,11 @@ Before running, collect from the customer (intake form §1, §3):
 `outputs-json` echoes those identity fields back under `phase0.platform_admin_user`,
 `phase0.breakglass_user`, and `phase0.account_email`, plus top-level
 `bootstrap_script` (`single-account-setup.sh` or `customer-org-setup.sh`) and
-`bootstrap_variant`. Apply also writes them to SSM under `/3am/bootstrap/*` so a
-later `outputs-json` in a fresh shell can recover them.
+`bootstrap_variant`. Apply writes them to SSM under `/3am/bootstrap/*` so a
+later `outputs-json` in a fresh shell can recover them — including on
+**Pass A** (`--skip-bootstrap`, script **≥ 0.2.32**). Older Pass A runs
+left those SSM keys empty; re-export with the identity flags or re-apply
+Pass A on 0.2.32+.
 | `--allowed-regions` | Intake §3 primary region + any pre-approved secondaries |
 | `--deployment-region` *(optional)* | Intake §3 primary deployment region — pass only when it differs from the IDC home region the script's `AWS_REGION` points at |
 
