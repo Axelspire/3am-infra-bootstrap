@@ -315,6 +315,13 @@ If `outputs-json` shows empty `phase5.*` fields, the Phase 5 step in
 the child account never completed. Re-run `apply` with the original
 flags — every step that already succeeded is a no-op.
 
+**ExternalId / artifact CMK after a Phase 5 re-run.** Idempotent reuse
+does **not** mean trust and CI mirrors stay aligned. If Phase 5
+rewrites `ThreeAM-Deployment` trust (`update-assume-role-policy`) or
+refreshes `ThreeAM-Deployment-Permissions`, follow §9.2: remirror CI
+`/3am/license/external-id/<customer_id>` and verify the artifact CMK
+ARN against `customer.hcl` / SSM `/3am/axelspire/artifact-kms-key-arn`.
+
 ---
 
 ## 8. Verifying the output JSON
@@ -463,6 +470,26 @@ channel — see `README.md → Hand-off to AxelSpire` for the customer
 side and `CUSTOMER-ONBOARDING-OPS.md` for where to put it on the
 platform side.
 
+### 9.2 Phase 5 trust rewrite → CI ExternalId remirror (DEPLOY-35)
+
+After any `update-assume-role-policy` / Phase 5 re-run that changes
+`sts:ExternalId` on `ThreeAM-Deployment`, operators **must** remirror
+CI Secrets Manager `/3am/license/external-id/<customer_id>` via
+`3am-deployments` `ops-mirror-external-id` (requires Appendix C
+`ManageCustomerExternalId` on `GitHubActions-CustomerDeploy`). Trust
+is the source of truth; a stale CI mirror causes `AssumeRole`
+`AccessDenied` on `customer-deploy`.
+
+Re-running Phase 5 on a **shared** account (for example a failed eyes
+bootstrap that reused the demo account) can also rotate trust or leave
+the wrong artifact CMK ARN in `ThreeAM-Deployment-Permissions`. After
+such a re-run, verify:
+
+- trust `sts:ExternalId` vs CI SM `/3am/license/external-id/<customer_id>`
+  (remirror if they diverge)
+- `KmsDataPlane` / artifact key ARN in `ThreeAM-Deployment-Permissions`
+  against `customer.hcl` and SSM `/3am/axelspire/artifact-kms-key-arn`
+
 ---
 
 ## 10. Troubleshooting
@@ -477,6 +504,8 @@ platform side.
 | Phase 5 fails with SCP denial | Customer Org has an SCP forbidding `kms:CreateKey` / `iam:CreateRole` / etc. in the child | Customer ops must adjust the SCP. AxelSpire cannot bypass it |
 | `outputs-json` shows empty `phase5.*` | Phase 5 never ran (most common: `--skip-bootstrap` was passed, or assume-role into child failed) | Re-run `apply` with the original flags; every successful step is a no-op |
 | Intake-write rejects the JSON with "unpopulated template" | The JSON's `customer_id` is `__CUSTOMER_ID__` or similar placeholder | Confirm you captured the *real* output of `outputs-json` to the path you passed |
+| `customer-deploy` AssumeRole `AccessDenied` (ExternalId) after Phase 5 re-run | Trust `sts:ExternalId` rotated; CI SM `/3am/license/external-id/<customer_id>` still has the old value | Remirror via `ops-mirror-external-id` (§9.2); confirm Appendix C `ManageCustomerExternalId` on the live CI role |
+| Wrong artifact CMK / `KmsDataPlane` after shared-account Phase 5 | Phase 5 re-run on a shared account left a different key ARN in `ThreeAM-Deployment-Permissions` | Compare role policy + SSM `/3am/axelspire/artifact-kms-key-arn` to `customer.hcl`; re-apply Pass B with the correct `--axelspire-artifact-kms-key-arn` |
 
 For platform-side failures (PR scaffolding, `platform-deploy` apply,
 `customer-deploy` apply) see
