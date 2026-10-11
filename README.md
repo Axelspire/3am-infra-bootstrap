@@ -456,6 +456,11 @@ script reuses it on re-run rather than regenerating it. See
 [`docs/REVIEWING.md`](docs/REVIEWING.md) § "Hand-off" for the channel
 specifics.
 
+If Phase 5 rewrites `ThreeAM-Deployment` trust (`sts:ExternalId`),
+AxelSpire must remirror CI Secrets Manager
+`/3am/license/external-id/<customer_id>` (`ops-mirror-external-id`) —
+see [`docs/BOOTSTRAP-OPS.md`](docs/BOOTSTRAP-OPS.md) §9.2.
+
 ---
 
 ## Verify the apply
@@ -1279,6 +1284,17 @@ omits `sts:TagSession`. The deploy chain in
    ```
 
 3. Policy name: `customer-deploy-permissions`. **Create policy**.
+
+> **`ManageCustomerExternalId` is required for remirror.** That
+> statement (GetSecretValue / DescribeSecret / CreateSecret /
+> PutSecretValue / TagResource on
+> `arn:aws:secretsmanager:*:033113129683:secret:/3am/license/external-id/*`
+> only — **do not** grant `secretsmanager:*`) is what
+> `3am-deployments` `ops-mirror-external-id` and Pass B remirror need
+> to write CI `/3am/license/external-id/<customer_id>`. The live
+> `GitHubActions-CustomerDeploy` role has historically lagged this
+> appendix (GetSecretValue-only). After any CI IAM edit, re-check the
+> inline policy Sids before relying on remirror.
 
 ### Step 5 — Verify
 
