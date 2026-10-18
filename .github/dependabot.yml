@@ -6,8 +6,3 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-  - package-ecosystem: /agent/repos/3am-infra-bootstrap
-    directory: /agent/repos/3am-infra-bootstrap
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
