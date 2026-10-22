@@ -31,7 +31,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         # Default GITHUB_TOKEN is enough for checkout + committing gist ids.
         # BOOTSTRAP_GIST_TOKEN is only needed for the gist API.
       - name: Require BOOTSTRAP_GIST_TOKEN
