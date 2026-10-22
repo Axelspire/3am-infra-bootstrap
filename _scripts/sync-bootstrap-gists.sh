@@ -63,7 +63,7 @@ manifest_changed=0
 tmp="$(mktemp)"
 # Drop the top-level owner key from the working copy of per-script entries.
 jq 'del(.owner)' "${MANIFEST}" > "${tmp}"
-trap 'rm -f "${tmp}" "${tmp}.new"' EXIT
+trap 'rm -f "${tmp}" "${tmp}.new" "${tmp}.payload"' EXIT
 
 keys="$(jq -r 'keys[]' "${tmp}")"
 while IFS= read -r key; do
@@ -75,9 +75,10 @@ while IFS= read -r key; do
   source_path="${REPO_ROOT}/${source_rel}"
   [[ -f "${source_path}" ]] || { echo "error: missing source ${source_path}" >&2; exit 1; }
 
-  files_json="$(jq -n --arg fn "${filename}" --rawfile body "${source_path}" \
-    '{($fn): {content: $body}}')"
-
+  # Build the gist API body via --rawfile + stdout. Do not pass script
+  # contents through bash argv (--argjson / echo "$var"): Linux MAX_ARG_STRLEN
+  # is 128KiB and bootstrap scripts already exceed that when JSON-wrapped.
+  payload="${tmp}.payload"
   if [[ -z "${gist_id}" || "${gist_id}" == "null" ]]; then
     echo "Creating gist for ${filename}..."
     if [[ "${DRY_RUN}" -eq 1 ]]; then
@@ -85,17 +86,21 @@ while IFS= read -r key; do
       continue
     fi
     if [[ "${PUBLIC}" -eq 1 ]]; then
-      resp="$(jq -n \
+      jq -n \
         --arg desc "${description}" \
-        --argjson files "${files_json}" \
-        '{description:$desc, public:true, files:$files}')"
+        --arg fn "${filename}" \
+        --rawfile body "${source_path}" \
+        '{description:$desc, public:true, files:{($fn):{content:$body}}}' \
+        > "${payload}"
     else
-      resp="$(jq -n \
+      jq -n \
         --arg desc "${description}" \
-        --argjson files "${files_json}" \
-        '{description:$desc, public:false, files:$files}')"
+        --arg fn "${filename}" \
+        --rawfile body "${source_path}" \
+        '{description:$desc, public:false, files:{($fn):{content:$body}}}' \
+        > "${payload}"
     fi
-    created="$(echo "${resp}" | gh api -X POST /gists --input -)"
+    created="$(gh api -X POST /gists --input "${payload}")"
     new_id="$(echo "${created}" | jq -r .id)"
     html_url="$(echo "${created}" | jq -r .html_url)"
     [[ -n "${new_id}" && "${new_id}" != "null" ]] || {
@@ -113,11 +118,13 @@ while IFS= read -r key; do
       echo "[dry-run] would PATCH gist ${gist_id}"
       continue
     fi
-    resp="$(jq -n \
+    jq -n \
       --arg desc "${description}" \
-      --argjson files "${files_json}" \
-      '{description:$desc, files:$files}')"
-    updated="$(echo "${resp}" | gh api -X PATCH "/gists/${gist_id}" --input -)"
+      --arg fn "${filename}" \
+      --rawfile body "${source_path}" \
+      '{description:$desc, files:{($fn):{content:$body}}}' \
+      > "${payload}"
+    updated="$(gh api -X PATCH "/gists/${gist_id}" --input "${payload}")"
     html_url="$(echo "${updated}" | jq -r .html_url)"
     echo "Updated ${filename} → ${html_url}"
   fi
