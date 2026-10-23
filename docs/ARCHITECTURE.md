@@ -1,7 +1,7 @@
 # Architecture
 
 **Category:** architecture  
-**Last updated:** 2026-10-20  
+**Last updated:** 2026-10-23
 **Audience:** platform architects, ops on rota
 
 ## TL;DR
@@ -24,3 +24,4 @@ Human-facing product history for operators. **Criterion links** live in the Axel
 | Date (UTC) | Summary | PR |
 | --- | --- | --- |
 | 2026-10-18 | Dependabot path fix for readiness SEC.04 | [#26](https://github.com/Axelspire/3am-infra-bootstrap/pull/26) |
+| 2026-10-23 | Add default-branch gitleaks secret-scan CI (SEC.02.L2.b) | [#30](https://github.com/Axelspire/3am-infra-bootstrap/pull/30) |
