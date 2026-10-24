@@ -1198,7 +1198,15 @@ EOF
     { "Effect": "Allow", "Action": ["events:ListRules"], "Resource": ["*"] },
     { "Effect": "Allow", "Action": ["events:*"],
       "Resource": ["arn:${PARTITION}:events:*:${ACCOUNT_ID}:rule/*"] },
-    { "Effect": "Allow", "Action": ["elasticloadbalancing:*"], "Resource": ["*"] }
+    { "Effect": "Allow", "Action": ["elasticloadbalancing:*"], "Resource": ["*"] },
+    { "Sid": "SnsListTopics", "Effect": "Allow",
+      "Action": ["sns:ListTopics","sns:ListPlatformApplications"],
+      "Resource": ["*"] },
+    { "Sid": "SnsOn3amTopics", "Effect": "Allow", "Action": ["sns:*"],
+      "Resource": [
+        "arn:${PARTITION}:sns:*:${ACCOUNT_ID}:3am-*",
+        "arn:${PARTITION}:sns:*:${ACCOUNT_ID}:3am-*:*"
+      ] }
   ]
 }
 EOF
