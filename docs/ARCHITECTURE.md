@@ -23,6 +23,7 @@ Human-facing product history for operators. **Criterion links** live in the Axel
 
 | Date (UTC) | Summary | PR |
 | --- | --- | --- |
+| 2026-10-24 | DEPLOY-44: Phase 5 Apps grants `sns:*` on `3am-*` topics (cert lifecycle CreateTopic) | (this PR) |
 | 2026-10-24 | readiness-ci residency-contract-check: Pass B handoff requires non-empty allowed_regions | [#32](https://github.com/Axelspire/3am-infra-bootstrap/pull/32) |
 | 2026-10-18 | Dependabot path fix for readiness SEC.04 | [#26](https://github.com/Axelspire/3am-infra-bootstrap/pull/26) |
 | 2026-10-23 | Add default-branch gitleaks secret-scan CI (SEC.02.L2.b) | [#30](https://github.com/Axelspire/3am-infra-bootstrap/pull/30) |

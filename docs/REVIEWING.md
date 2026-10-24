@@ -101,6 +101,9 @@ Three inline policies, all attached to the same role.
 - IAM full access on customer `role/*` and `policy/*` (Lambda execution roles).
 - S3 create/manage on app buckets (`alb-*-3am-access-logs`, `trail-pki-*`, `*.3amops.com`).
 - ELB full access (`elasticloadbalancing:*`) for internal ALB and OCSP target groups.
+- SNS full access on `3am-*` topics and their subscriptions (`sns:*` on topic +
+  `topic:*` ARNs); `sns:ListTopics` / `ListPlatformApplications` on `*`
+  (DEPLOY-44 / `3am-cert-lifecycle`).
 
 ## 4. CMK policy walkthrough
 
