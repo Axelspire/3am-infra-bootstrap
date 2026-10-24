@@ -233,7 +233,7 @@ load_pass_b_handoff () {
   ACCOUNT_EMAIL=$(jq -r '.account_email // empty' "${path}")
   PLATFORM_ADMIN_USER=$(jq -r '.platform_admin_user // empty' "${path}")
   BREAKGLASS_USER=$(jq -r '.breakglass_user // empty' "${path}")
-  ALLOWED_REGIONS_CSV=$(jq -r '.allowed_regions // empty' "${path}")
+  ALLOWED_REGIONS_CSV=$(jq -r '(.allowed_regions // "") | gsub("^\\s+|\\s+$";"")' "${path}")
   DEPLOYMENT_REGION=$(jq -r '.deployment_region // .region // empty' "${path}")
   AXELSPIRE_ARTIFACT_KMS_KEY_ARN=$(jq -r '.axelspire_artifact_kms_key_arn // empty' "${path}")
   AXELSPIRE_ARTIFACT_S3_BUCKET_ARN=$(jq -r '.axelspire_artifact_s3_bucket_arn // empty' "${path}")
@@ -249,7 +249,9 @@ load_pass_b_handoff () {
   [ -n "${BREAKGLASS_USER}" ] || die "--from-handoff: breakglass_user missing in ${path}"
   [ -n "${AXELSPIRE_ARTIFACT_KMS_KEY_ARN}" ] || die "--from-handoff: axelspire_artifact_kms_key_arn missing in ${path}"
   [ -n "${DEPLOYMENT_REGION}" ] || die "--from-handoff: deployment_region missing in ${path}"
-  [ -n "${ALLOWED_REGIONS_CSV}" ] || ALLOWED_REGIONS_CSV="${DEPLOYMENT_REGION}"
+  # DAT.03.L2.b — residency contract: handoff must declare non-empty allowed_regions
+  # (no silent fallback to deployment_region).
+  [ -n "${ALLOWED_REGIONS_CSV}" ] || die "--from-handoff: allowed_regions missing or blank in ${path}"
 
   SKIP_ORG=true
   SKIP_BOOTSTRAP=false
