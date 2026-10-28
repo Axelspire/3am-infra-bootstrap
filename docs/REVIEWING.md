@@ -66,7 +66,7 @@ Three inline policies, all attached to the same role.
 
 ### `ThreeAM-Deployment-Permissions` [`iam.tf`]
 
-- `lambda:*` scoped to `function:3am-*`.
+- `lambda:*` scoped to `function:3am-*` and `layer:3am-*` (DESIGN-90).
 - KMS data-plane on the customer CMK only (no `kms:PutKeyPolicy`, no
   `kms:ScheduleKeyDeletion`, no `kms:CreateGrant`).
 - S3 on the state bucket only (object read/write/delete + list).
