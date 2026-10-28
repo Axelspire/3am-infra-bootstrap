@@ -1011,6 +1011,9 @@ EOF
     { "Sid": "LambdaOn3amFunctions", "Effect": "Allow",
       "Action": ["lambda:*"],
       "Resource": ["arn:${PARTITION}:lambda:*:${ACCOUNT_ID}:function:3am-*"] },
+    { "Sid": "LambdaOn3amLayers", "Effect": "Allow",
+      "Action": ["lambda:*"],
+      "Resource": ["arn:${PARTITION}:lambda:*:${ACCOUNT_ID}:layer:3am-*"] },
     { "Sid": "KmsDataPlaneOnCustomerCmk", "Effect": "Allow",
       "Action": ["kms:Encrypt","kms:Decrypt","kms:ReEncryptFrom","kms:ReEncryptTo",
                  "kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext","kms:DescribeKey"],
@@ -1680,6 +1683,12 @@ phase5_put_ssm_params () {
   log "publishing /3am/* SSM parameters"
   _put_ssm () {
     local name=$1 desc=$2 value=$3 type=${4:-String} key_id=${5:-}
+    # Skip blanks: --skip-org re-runs / single-account leave IdC emails or
+    # account-email empty; PutParameter rejects Value length < 1.
+    if [ -z "${value}" ]; then
+      log "skipping SSM ${name} (empty value)"
+      return 0
+    fi
     if [ "${type}" = "SecureString" ] && [ -n "${key_id}" ]; then
       aws ssm put-parameter --name "${name}" --description "${desc}" \
         --type "${type}" --key-id "${key_id}" --overwrite --value "${value}" >/dev/null
