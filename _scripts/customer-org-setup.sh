@@ -14,7 +14,7 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.37"
+BOOTSTRAP_VERSION="0.2.38"
 BOOTSTRAP_VARIANT="multi-account"
 SCRIPT_LAST_UPDATED="2026-11-16"
 BOOTSTRAP_SCRIPT_NAME="customer-org-setup.sh"
@@ -1352,7 +1352,9 @@ EOF
     { "Effect": "Allow", "Action": ["logs:*"], "Resource": ["*"] },
     { "Effect": "Allow", "Action": ["apigateway:*"],
       "Resource": ["arn:${PARTITION}:apigateway:*::/*",
+                   "arn:${PARTITION}:apigateway:*:${ACCOUNT_ID}:/domainnames",
                    "arn:${PARTITION}:apigateway:*:${ACCOUNT_ID}:/domainnames/*",
+                   "arn:${PARTITION}:apigateway:*:${ACCOUNT_ID}:/domainnameaccessassociations",
                    "arn:${PARTITION}:apigateway:*:${ACCOUNT_ID}:/domainnameaccessassociations/*"] },
     { "Effect": "Allow", "Action": ["route53:*"], "Resource": ["*"] },
     { "Effect": "Allow", "Action": ["acm:*"], "Resource": ["*"] },

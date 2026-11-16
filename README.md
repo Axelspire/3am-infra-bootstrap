@@ -988,7 +988,9 @@ cat > /tmp/perms-extra.json <<EOF
       "Action":["apigateway:GET","apigateway:POST","apigateway:PUT","apigateway:PATCH",
                 "apigateway:DELETE","apigateway:TagResource","apigateway:UntagResource",
                 "apigateway:CreateAccessAssociation","apigateway:RejectAccessAssociation"],
-      "Resource":["arn:${PARTITION}:apigateway:*:${ACCOUNT_ID}:/domainnames/*",
+      "Resource":["arn:${PARTITION}:apigateway:*:${ACCOUNT_ID}:/domainnames",
+                  "arn:${PARTITION}:apigateway:*:${ACCOUNT_ID}:/domainnames/*",
+                  "arn:${PARTITION}:apigateway:*:${ACCOUNT_ID}:/domainnameaccessassociations",
                   "arn:${PARTITION}:apigateway:*:${ACCOUNT_ID}:/domainnameaccessassociations/*"]
     },
     {
