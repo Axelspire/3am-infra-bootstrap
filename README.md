@@ -984,6 +984,14 @@ cat > /tmp/perms-extra.json <<EOF
       "Condition":{"StringEquals":{"aws:ResourceTag/Service":"3am"}}
     },
     {
+      "Sid":"ApiGatewayPrivateCustomDomains","Effect":"Allow",
+      "Action":["apigateway:GET","apigateway:POST","apigateway:PUT","apigateway:PATCH",
+                "apigateway:DELETE","apigateway:TagResource","apigateway:UntagResource",
+                "apigateway:CreateAccessAssociation","apigateway:RejectAccessAssociation"],
+      "Resource":["arn:${PARTITION}:apigateway:*:${ACCOUNT_ID}:/domainnames/*",
+                  "arn:${PARTITION}:apigateway:*:${ACCOUNT_ID}:/domainnameaccessassociations/*"]
+    },
+    {
       "Sid":"Route53Read","Effect":"Allow",
       "Action":["route53:ListHostedZones","route53:GetHostedZone",
                 "route53:ListResourceRecordSets","route53:GetChange"],
