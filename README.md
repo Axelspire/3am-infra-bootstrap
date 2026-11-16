@@ -980,7 +980,8 @@ cat > /tmp/perms-extra.json <<EOF
       "Sid":"ApiGatewayOnTaggedResources","Effect":"Allow",
       "Action":["apigateway:GET","apigateway:POST","apigateway:PUT","apigateway:PATCH",
                 "apigateway:DELETE","apigateway:TagResource","apigateway:UntagResource"],
-      "Resource":"arn:${PARTITION}:apigateway:*::/*",
+      "Resource":["arn:${PARTITION}:apigateway:*::/*",
+                  "arn:${PARTITION}:apigateway:*:${ACCOUNT_ID}:/*"],
       "Condition":{"StringEquals":{"aws:ResourceTag/Service":"3am"}}
     },
     {

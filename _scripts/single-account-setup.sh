@@ -23,9 +23,9 @@
 
 set -Eeuo pipefail
 
-BOOTSTRAP_VERSION="0.2.36"
+BOOTSTRAP_VERSION="0.2.37"
 BOOTSTRAP_VARIANT="single-account"
-SCRIPT_LAST_UPDATED="2026-10-28"
+SCRIPT_LAST_UPDATED="2026-11-16"
 BOOTSTRAP_SCRIPT_NAME="single-account-setup.sh"
 BOOTSTRAP_REPO="${BOOTSTRAP_REPO:-Axelspire/3am-infra-bootstrap}"
 BOOTSTRAP_GIT_REF="${BOOTSTRAP_GIT_REF:-main}"
@@ -1070,7 +1070,8 @@ EOF
     { "Effect": "Allow", "Action": ["ssm:DescribeParameters"], "Resource": ["*"] },
     { "Effect": "Allow", "Action": ["logs:*"], "Resource": ["*"] },
     { "Effect": "Allow", "Action": ["apigateway:*"],
-      "Resource": ["arn:${PARTITION}:apigateway:*::/*"] },
+      "Resource": ["arn:${PARTITION}:apigateway:*::/*",
+                   "arn:${PARTITION}:apigateway:*:${ACCOUNT_ID}:/*"] },
     { "Effect": "Allow", "Action": ["route53:*"], "Resource": ["*"] },
     { "Effect": "Allow", "Action": ["acm:*"], "Resource": ["*"] },
     { "Sid": "CloudFrontStatusEdge", "Effect": "Allow",
